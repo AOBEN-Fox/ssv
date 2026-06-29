@@ -124,6 +124,10 @@ RTSP_LATENCY="${SSV_RTSP_LATENCY:-200}"
 REDIS_HOST="${REDIS_HOST:-localhost}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 REDIS_STREAM_KEY="${SSV_REDIS_STREAM_KEY:-ssv:events}"
+HELMET_EVENT_ENABLED="${SSV_EVENT_HELMET_VIOLATION_ENABLED:-true}"
+HELMET_TRIGGER_CLASS="${SSV_EVENT_HELMET_TRIGGER_CLASS:-head}"
+PUBLISH_DETECTION_EVENTS="${SSV_PUBLISH_DETECTION_EVENTS:-true}"
+EVIDENCE_OUTPUT_DIR="${SSV_EVIDENCE_OUTPUT_DIR:-artifacts/evidence}"
 CHECK_TIMEOUT="${SSV_CHECK_TIMEOUT:-30s}"
 
 resolve_display_sink() {
@@ -173,9 +177,9 @@ resolve_display_sink() {
 
 DISPLAY_SINK="$(resolve_display_sink)"
 display_sink_args=("$DISPLAY_SINK")
-if [ "$DISPLAY_SINK" != "gtksink" ]; then
-    display_sink_args+=("sync=false")
-fi
+# if [ "$DISPLAY_SINK" != "gtksink" ]; then
+display_sink_args+=("sync=false")
+# fi
 
 rtsp_decode_pipeline=(
     rtspsrc "location=$RTSP_URL" "protocols=$RTSP_PROTOCOLS" "latency=$RTSP_LATENCY"
@@ -206,7 +210,11 @@ analysis_pipeline=(
     ! ssvtemplate
     ! "${infer_props[@]}"
     ! ssvtrack
-    ! ssvpub "redis-host=$REDIS_HOST" "redis-port=$REDIS_PORT" "stream-key=$REDIS_STREAM_KEY"
+    ! ssvpub "redis-host=$REDIS_HOST" "redis-port=$REDIS_PORT" "stream-key=$REDIS_STREAM_KEY" \
+        "helmet-event-enabled=$HELMET_EVENT_ENABLED" \
+        "helmet-trigger-class=$HELMET_TRIGGER_CLASS" \
+        "publish-detection-events=$PUBLISH_DETECTION_EVENTS" \
+        "evidence-output-dir=$EVIDENCE_OUTPUT_DIR"
 )
 
 display_source_pipeline=(
@@ -223,6 +231,8 @@ ssv_info "推理设备: $INFER_DEVICE (cuda-device-id=$CUDA_DEVICE_ID, cuda-requ
 ssv_info "目标类别: ${TARGET_CLASS:-全部类别}"
 ssv_info "类别表: ${LABEL_MAP:-内置 COCO}"
 ssv_info "Redis Stream: $REDIS_STREAM_KEY"
+ssv_info "安全帽事件: enabled=$HELMET_EVENT_ENABLED, trigger-class=$HELMET_TRIGGER_CLASS"
+ssv_info "证据目录: $EVIDENCE_OUTPUT_DIR"
 
 if [ "$SHOW_DISPLAY" = true ]; then
     ssv_info "模式: 实时链路 + 视频观察窗口 (sink: $DISPLAY_SINK)"

@@ -47,9 +47,36 @@ class TrackingConfig(BaseModel):
     mock_track: bool = False
 
 
+class HelmetViolationEventConfig(BaseModel):
+    enabled: bool = True
+    trigger_class: str = "head"
+    publish_detection_events: bool = True
+
+
+class EventsConfig(BaseModel):
+    helmet_violation: HelmetViolationEventConfig = HelmetViolationEventConfig()
+
+
+class EvidenceConfig(BaseModel):
+    output_dir: str = "artifacts/evidence"
+
+
+class ReviewsConfig(BaseModel):
+    output_dir: str = "artifacts/reviews"
+
+
+class AgentModelConfig(BaseModel):
+    provider: str = "mock"
+    base_url: str = "https://right.codes/codex/v1"
+    model: str = "gpt-5.5"
+    api_key_env: str = "RIGHT_CODES_API_KEY"
+    timeout_seconds: int = 60
+
+
 class AgentConfig(BaseModel):
     state_machine_timeout: int = 300
     max_retries: int = 3
+    model: AgentModelConfig = AgentModelConfig()
 
 
 class SsvConfig(BaseModel):
@@ -60,6 +87,9 @@ class SsvConfig(BaseModel):
     pipeline: PipelineConfig = PipelineConfig()
     inference: InferenceConfig = InferenceConfig()
     tracking: TrackingConfig = TrackingConfig()
+    events: EventsConfig = EventsConfig()
+    evidence: EvidenceConfig = EvidenceConfig()
+    reviews: ReviewsConfig = ReviewsConfig()
     agent: AgentConfig = AgentConfig()
     sources: list[dict] = []
 
@@ -74,6 +104,26 @@ def _apply_env_overrides(cfg: SsvConfig) -> None:
         cfg.logging.python_log_level = v
     if v := os.environ.get("SSV_DISPLAY_SINK"):
         cfg.display.sink = v
+    if v := os.environ.get("SSV_EVENT_HELMET_VIOLATION_ENABLED"):
+        cfg.events.helmet_violation.enabled = v.lower() in {"1", "true", "yes", "on"}
+    if v := os.environ.get("SSV_EVENT_HELMET_TRIGGER_CLASS"):
+        cfg.events.helmet_violation.trigger_class = v
+    if v := os.environ.get("SSV_PUBLISH_DETECTION_EVENTS"):
+        cfg.events.helmet_violation.publish_detection_events = v.lower() in {"1", "true", "yes", "on"}
+    if v := os.environ.get("SSV_EVIDENCE_OUTPUT_DIR"):
+        cfg.evidence.output_dir = v
+    if v := os.environ.get("SSV_REVIEWS_OUTPUT_DIR"):
+        cfg.reviews.output_dir = v
+    if v := os.environ.get("SSV_REVIEW_PROVIDER"):
+        cfg.agent.model.provider = v
+    if v := os.environ.get("SSV_REVIEW_BASE_URL"):
+        cfg.agent.model.base_url = v
+    if v := os.environ.get("SSV_REVIEW_MODEL"):
+        cfg.agent.model.model = v
+    if v := os.environ.get("SSV_REVIEW_API_KEY_ENV"):
+        cfg.agent.model.api_key_env = v
+    if v := os.environ.get("SSV_REVIEW_TIMEOUT_SECONDS"):
+        cfg.agent.model.timeout_seconds = int(v)
 
 
 def load_config(path: str | Path | None = None) -> SsvConfig:

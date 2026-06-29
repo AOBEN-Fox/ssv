@@ -148,6 +148,14 @@ cp .env.example .env
 | `REDIS_HOST` | Redis 地址 | `localhost` |
 | `REDIS_PORT` | Redis 端口 | `6379` |
 | `SSV_REDIS_STREAM_KEY` | Redis Stream key | `ssv:events` |
+| `SSV_EVENT_HELMET_VIOLATION_ENABLED` | 是否启用未佩戴安全帽事件 | `true` |
+| `SSV_EVENT_HELMET_TRIGGER_CLASS` | 触发违规事件的类别名 | `head` |
+| `SSV_PUBLISH_DETECTION_EVENTS` | 是否继续发布普通 detection 消息 | `true` |
+| `SSV_EVIDENCE_OUTPUT_DIR` | 证据帧输出目录 | `artifacts/evidence` |
+| `SSV_REVIEWS_OUTPUT_DIR` | Agent 复核结果输出目录 | `artifacts/reviews` |
+| `SSV_REVIEW_PROVIDER` | Agent 复核 provider，支持 `mock` 和 `right_codes` | `mock` |
+| `SSV_REVIEW_MODEL` | Right Codes 视觉复核模型 | `gpt-5.5` |
+| `RIGHT_CODES_API_KEY` | Right Codes API key | 无，真实调用时必须设置 |
 
 ONNX Runtime 下载和路径覆盖：
 
@@ -208,9 +216,10 @@ docker exec ssv-redis redis-cli XRANGE ssv:events - + COUNT 5
 
 ```bash
 ./ssv agent
+SSV_REVIEW_PROVIDER=right_codes RIGHT_CODES_API_KEY=<key> ./ssv agent
 ```
 
-Agent 当前用于消费 Redis Streams 并验证事件消费基线。完整上下文构造、状态机、工具路由和模型 provider 在后续 roadmap 阶段实现。
+默认 `SSV_REVIEW_PROVIDER=mock`，Agent 会为 `helmet_violation` 事件生成本地 JSON/Markdown 复核结果。设置 `SSV_REVIEW_PROVIDER=right_codes` 和 `RIGHT_CODES_API_KEY` 后，Agent 会通过 Right Codes OpenAI-compatible API 调用 `gpt-5.5` 进行视觉复核。
 
 ### GStreamer 日志
 

@@ -41,6 +41,24 @@ tracking:
   match_threshold: 0.3
   mock_track: false
 
+events:
+  helmet_violation:
+    enabled: true
+    trigger_class: "head"
+    publish_detection_events: true
+
+evidence:
+  output_dir: "artifacts/evidence"
+
+reviews:
+  output_dir: "artifacts/reviews"
+
 agent:
   state_machine_timeout: 300
   max_retries: 3
+  model:
+    provider: "mock"
+    base_url: "https://right.codes/codex/v1"
+    model: "gpt-5.5"
+    api_key_env: "RIGHT_CODES_API_KEY"
+    timeout_seconds: 60
