@@ -34,7 +34,7 @@ grep -q 'videorate' scripts/pipeline.sh || fail "pipeline script does not normal
 grep -q 'SSV_ANALYSIS_FPS' scripts/pipeline.sh || fail "pipeline script does not expose analysis fps"
 grep -q 'display_source_pipeline' scripts/pipeline.sh || fail "display mode does not split before inference"
 grep -q 'DISPLAY_OVERLAY' scripts/pipeline.sh || fail "display overlay is not controlled by an explicit switch"
-if rg -n '^DISPLAY=' scripts/pipeline.sh >/tmp/ssv-display-var-matches.txt; then
+if grep -nE '^DISPLAY=' scripts/pipeline.sh >/tmp/ssv-display-var-matches.txt; then
     cat /tmp/ssv-display-var-matches.txt >&2
     fail "pipeline script must not overwrite the desktop DISPLAY environment variable"
 fi
@@ -47,7 +47,7 @@ grep -q 'exec bash "$SCRIPTS_DIR/test.sh"' ssv || fail "ssv does not dispatch te
 grep -q 'DISPLAY_SINK_OVERRIDE' scripts/pipeline.sh || fail "pipeline script does not use explicit display sink override"
 grep -q 'gst-inspect-1.0 gtksink' scripts/pipeline.sh || fail "pipeline script does not prefer a GTK window sink"
 grep -q '\$DISPLAY_SINK" != "gtksink"' scripts/pipeline.sh || fail "pipeline script should not force sync=false on gtksink"
-if rg -n 'gtksink 使用单链路显示|\$DISPLAY_SINK" = "gtksink"' scripts/pipeline.sh >/tmp/ssv-gtksink-single-chain-matches.txt; then
+if grep -nE 'gtksink 使用单链路显示|\$DISPLAY_SINK" = "gtksink"' scripts/pipeline.sh >/tmp/ssv-gtksink-single-chain-matches.txt; then
     cat /tmp/ssv-gtksink-single-chain-matches.txt >&2
     fail "gtksink should use the same tee display path as other sinks"
 fi
@@ -59,18 +59,33 @@ grep -q '#include <thread>' gst/ssv-infer/gstssvinfer.cpp || fail "ssvinfer does
 grep -q 'PROP_ASYNC_INFER' gst/ssv-infer/gstssvinfer.cpp || fail "ssvinfer does not expose async inference"
 grep -q 'latest_frame' gst/ssv-infer/gstssvinfer.cpp || fail "ssvinfer does not keep latest frame for async inference"
 grep -q 'async=true' scripts/pipeline.sh || fail "pipeline script does not enable async inference"
-grep -q 'SSV_INFER_DEVICE' scripts/pipeline.sh || fail "pipeline script does not expose inference device"
-grep -q 'SSV_CUDA_DEVICE_ID' scripts/pipeline.sh || fail "pipeline script does not expose CUDA device id"
-grep -q 'SSV_CUDA_REQUIRED' scripts/pipeline.sh || fail "pipeline script does not expose CUDA required flag"
-grep -q 'device=\$INFER_DEVICE' scripts/pipeline.sh || fail "pipeline script does not pass device to ssvinfer"
-grep -q 'cuda-device-id=\$CUDA_DEVICE_ID' scripts/pipeline.sh || fail "pipeline script does not pass CUDA device id to ssvinfer"
-grep -q 'cuda-required=\$CUDA_REQUIRED' scripts/pipeline.sh || fail "pipeline script does not pass CUDA required flag to ssvinfer"
+grep -q 'SSV_RUNTIME_BACKEND' scripts/pipeline.sh || fail "pipeline script does not expose runtime backend"
+grep -q 'SSV_RUNTIME_DEVICE' scripts/pipeline.sh || fail "pipeline script does not expose runtime device"
+grep -q 'RUNTIME_BACKEND="${SSV_RUNTIME_BACKEND:-onnx}"' scripts/pipeline.sh || fail "pipeline script does not default runtime backend to onnx"
+grep -q 'runtime=\$RUNTIME_BACKEND' scripts/pipeline.sh || fail "pipeline script does not pass runtime backend to ssvinfer"
+grep -q 'device=\$RUNTIME_DEVICE' scripts/pipeline.sh || fail "pipeline script does not pass runtime device to ssvinfer"
+grep -q '^runtime:' config/ssv.default.yaml || fail "default config does not expose top-level runtime section"
+grep -q 'backend: "onnx"' config/ssv.default.yaml || fail "default config does not default runtime backend to onnx"
+grep -q 'device: "cpu"' config/ssv.default.yaml || fail "default config does not default runtime device to cpu"
+if grep -nE '^[[:space:]]+runtime:' config/ssv.default.yaml config/ssv.example.yaml >/tmp/ssv-nested-runtime-matches.txt; then
+    cat /tmp/ssv-nested-runtime-matches.txt >&2
+    fail "runtime must not be nested under inference"
+fi
+if grep -nE 'SSV_CUDA_REQUIRED|cuda-required|device: "auto"|device=auto|str_equal\(device, "auto"\)|OrtCUDAProviderOptions|AppendExecutionProvider_CUDA|SSV_RUNTIME_DEVICE=auto|SSV_INFER_CUDA_DEVICE_ID=auto|runtime-device|onnx-cuda-device-id|cuda_device_id|cuda-device-id' scripts/pipeline.sh config/ssv.default.yaml config/ssv.example.yaml gst/ssv-infer/gstssvinfer.cpp >/tmp/ssv-cuda-coupling-matches.txt; then
+    cat /tmp/ssv-cuda-coupling-matches.txt >&2
+    fail "GPU entry must use runtime/device without legacy device naming or direct CUDA provider code in gstssvinfer"
+fi
+if grep -nE 'SSV_CUDA_REQUIRED|SSV_INFER_RUNTIME_DEVICE|SSV_ONNX_CUDA_DEVICE_ID|SSV_RUNTIME_DEVICE=auto|SSV_INFER_CUDA_DEVICE_ID=auto|auto 优先 CUDA' .env.example >/tmp/ssv-env-cuda-matches.txt; then
+    cat /tmp/ssv-env-cuda-matches.txt >&2
+    fail ".env.example must document runtime/device based selection"
+fi
 grep -q 'SSV_ONNXRUNTIME_FLAVOR' scripts/build.sh || fail "build script does not expose ONNX Runtime flavor"
-grep -q 'onnxruntime-gpu' scripts/build.sh || fail "build script does not isolate ONNX Runtime GPU package"
-grep -q 'SSV_ONNXRUNTIME_FLAVOR' scripts/lib.sh || fail "runtime script does not use ONNX Runtime flavor"
-grep -q 'onnxruntime-gpu' scripts/lib.sh || fail "runtime script does not select ONNX Runtime GPU path"
-grep -q 'site-packages' scripts/lib.sh || fail "runtime script does not discover Python site-packages"
-grep -q 'nvidia/.*/lib' scripts/lib.sh || grep -q 'nvidia/\*/lib' scripts/lib.sh || fail "runtime script does not add NVIDIA wheel lib directories"
+grep -q 'scripts/runtime/onnxruntime.sh' scripts/lib.sh || fail "runtime script does not source ONNX Runtime helper"
+grep -q 'scripts/runtime/cuda.sh' scripts/lib.sh || fail "runtime script does not source CUDA helper"
+grep -q 'SSV_ONNXRUNTIME_FLAVOR' scripts/runtime/onnxruntime.sh || fail "ONNX Runtime helper does not expose flavor"
+grep -q 'onnxruntime-gpu' scripts/runtime/onnxruntime.sh || fail "ONNX Runtime helper does not select GPU path"
+grep -q 'site-packages' scripts/runtime/cuda.sh || fail "CUDA helper does not discover Python site-packages"
+grep -q 'nvidia/.*/lib' scripts/runtime/cuda.sh || grep -q 'nvidia/\*/lib' scripts/runtime/cuda.sh || fail "CUDA helper does not add NVIDIA wheel lib directories"
 grep -q 'SSV_TARGET_CLASS' scripts/pipeline.sh || fail "pipeline script does not expose target class"
 grep -q 'TARGET_CLASS="${SSV_TARGET_CLASS-person}"' scripts/pipeline.sh || fail "pipeline script does not preserve empty target class for all-class inference"
 grep -q 'SSV_LABEL_MAP' scripts/pipeline.sh || fail "pipeline script does not expose label map"
@@ -84,7 +99,7 @@ grep -q 'peek_latest' gst/ssv-common/include/ssv_meta.hpp || fail "detection sto
 grep -q "subdir('ssv-overlay')" gst/meson.build || fail "overlay plugin is not included in Meson"
 grep -q 'GST_ELEMENT_REGISTER_DEFINE(ssv_overlay, "ssvoverlay"' gst/ssv-overlay/gstssvoverlay.cpp || fail "ssvoverlay plugin is missing"
 
-if rg -n 'builddir' ssv scripts README.md .env.example >/tmp/ssv-builddir-matches.txt; then
+if grep -RInE 'builddir' ssv scripts README.md .env.example >/tmp/ssv-builddir-matches.txt; then
     cat /tmp/ssv-builddir-matches.txt >&2
     fail "scripts or docs still reference builddir"
 fi
