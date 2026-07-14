@@ -1,4 +1,5 @@
 #include "botsort_matching.hpp"
+#include "botsort_lapjv.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -104,33 +105,24 @@ linear_assignment(const std::vector<std::vector<float>> &cost_matrix, float thre
         return result;
     }
 
-    const double max_valid_sum = static_cast<double>(std::max(rows, cols)) * (static_cast<double>(thresh) + 1.0);
-    const double unmatched_penalty = max_valid_sum + 1.0;
-    const double invalid_penalty = unmatched_penalty * 2.0;
     const int size = rows + cols;
-
-    std::vector<std::vector<double>> expanded(size, std::vector<double>(size, invalid_penalty));
-
+    std::vector<std::vector<double>> expanded(size, std::vector<double>(size, static_cast<double>(thresh) / 2.0));
+    for (int r = rows; r < size; ++r) {
+        for (int c = cols; c < size; ++c) expanded[r][c] = 0.0;
+    }
     for (int r = 0; r < rows; ++r) {
-        for (int c = 0; c < cols; ++c) {
-            expanded[r][c] = cost_matrix[r][c] <= thresh ? static_cast<double>(cost_matrix[r][c]) : invalid_penalty;
-        }
-        for (int dummy = 0; dummy < rows; ++dummy) {
-            expanded[r][cols + dummy] = (dummy == r) ? unmatched_penalty : invalid_penalty;
-        }
+        for (int c = 0; c < cols; ++c) expanded[r][c] = cost_matrix[r][c];
     }
 
-    for (int dummy_row = 0; dummy_row < cols; ++dummy_row) {
-        const int r = rows + dummy_row;
-        for (int c = 0; c < cols; ++c) {
-            expanded[r][c] = (c == dummy_row) ? 0.0 : invalid_penalty;
-        }
-        for (int c = cols; c < size; ++c) {
-            expanded[r][c] = 0.0;
-        }
+    std::vector<int> assignment(size, -1);
+    std::vector<int> column_assignment(size, -1);
+    std::vector<double *> row_ptrs(size, nullptr);
+    for (int r = 0; r < size; ++r) row_ptrs[r] = expanded[r].data();
+    const int lap_status = lapjv_internal(
+        static_cast<uint_t>(size), row_ptrs.data(), assignment.data(), column_assignment.data());
+    if (lap_status != 0) {
+        assignment = hungarian_minimize(expanded);
     }
-
-    const auto assignment = hungarian_minimize(expanded);
     std::vector<bool> matched_cols(cols, false);
 
     for (int r = 0; r < rows; ++r) {

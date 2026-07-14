@@ -115,7 +115,7 @@ Python 使用 `lap.lapjv`，C++ 使用自实现 Hungarian。二者在存在唯�
 | sparseOptFlow 前置条件 | 已修复并通过回归 | D5 |
 | 阈值边界 | 已修复并通过边界回归 | D2 |
 | 内核输出 bbox | 已修复并通过 Kalman bbox 回归 | D3 |
-| 求解器并列最优行为 | 源码审查完成；运行时对照受 Python `lap` 缺失阻断 | D4 |
+| 求解器并列最优行为 | 已内置官方 BSD-2-Clause LAPJV，并通过 Python `lap==0.5.13` 四类矩阵对照 | D4 |
 
 ## 完整审核矩阵
 
@@ -127,7 +127,7 @@ Python 使用 `lap.lapjv`，C++ 使用自实现 Hungarian。二者在存在唯�
 | `KalmanFilter.initiate/predict/update` | 已审一致 | 比较 8 维均值和 `8×8` 协方差；允许声明的浮点容差 |
 | `BoTSortKalman::multi_predict()` | 已删除；主路径保留 Python 等价的 lost 速度清零 | 删除完成并通过构建回归 |
 | IoU、score fuse、阈值过滤 | 已审；阈值边界存在 D2 | 补低阈值、高阈值和新轨迹阈值等值用例 |
-| `linear_assignment` | 源码审查：唯一最优、阈值过滤和虚拟未匹配扩展与 Python `lapjv(extend_cost=True, cost_limit=thresh)` 语义对应；并列最优 ID 选择无法实测 | 安装固定版本 Python `lap` 后，以唯一最优、阈值等值、矩形矩阵和并列最优对照；按 D4 决定是否统一求解器 |
+| `linear_assignment` | 一致：内置官方 LAPJV；方阵扩展严格复现 Python wrapper 的 `cost_limit/extend_cost` 填充和结果截断 | 以 Python `lap==0.5.13` 固化唯一最优、阈值等值、矩形矩阵和并列最优回归 |
 | `remove_duplicates` | 一致：相同 IoU `< 0.15` 条件；均按轨迹存续帧数保留较长者，时长相等时删除 tracked 集合中的轨迹 | 增加多对 overlap、轨迹时长相等和不同的回归用例 |
 | `sparseOptFlow` warp 估计 | D5 已修复；OpenCV 固定图像序列对照仍未执行 | 运行 Python/C++ 固定 BGR 帧对照，记录 warp 容差 |
 | GMC 对状态的应用 | 不一致，D1 | 修复后用平移、旋转、缩放矩阵直接注入，比较完整状态与协方差 |
@@ -137,11 +137,15 @@ Python 使用 `lap.lapjv`，C++ 使用自实现 Hungarian。二者在存在唯�
 
 在上述“已迁移但未接入”项得到删除或独立验证结论前，本阶段不得使用“全部算法原理已审核”的表述。
 
+## LAPJV 第三方代码
+
+本仓 `gst/ssv-track/botsort/botsort_lapjv.cpp` 与 `botsort_lapjv.hpp` 来源于官方 `lap` 仓库的 LAPJV dense 实现，版本对应 `lap==0.5.13` 的源码族，许可证为 BSD-2-Clause；许可证全文保存在 `gst/ssv-track/botsort/LAPJV_LICENSE.txt`。Python `lap` 仅用于生成一致性测试基线，不参与 C++ 插件运行。
+
 ## 验收标准
 
 1. 新增的确定性对照测试覆盖“必覆盖场景”全部项目；基准结果固化在本仓，不在测试执行时读取外部 `/mnt/work/BoT-SORT`。
 2. D1、D2、D3 的修复前用例必须失败，修复后 Python/C++ 的逐帧离散状态和 ID 全等，浮点状态与协方差在声明容差内一致。
-3. D4 在可执行环境安装固定版本 Python `lap` 后取得实际对照结论；在此之前，报告必须明确其仅完成源码审查。
+3. D4 已通过固定版本 Python `lap==0.5.13` 的实际对照；C++ 运行时不依赖 Python。
 4. “完整审核矩阵”中的每个已迁移项均获得“一致”“已修复”或“已删除”的结论；D4 的 LAPJV 运行时对照作为唯一剩余门禁。
 5. `./ssv build` 和可执行的 BoT-SORT 内核/插件测试通过。若全量测试被 TensorRT 运行时环境阻断，报告必须将其与 BoT-SORT 结果明确隔离。
 6. `SsvDetection` 的下游可见数据契约回归测试通过。

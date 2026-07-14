@@ -32,6 +32,33 @@ GST_START_TEST(test_iou_cost_and_class_compatibility) {
 }
 GST_END_TEST
 
+GST_START_TEST(test_linear_assignment_matches_python_lapjv_limit_and_rectangular) {
+    const auto limited = botsort::linear_assignment({{0.5F, 0.6F}, {0.6F, 0.5F}}, 0.5F);
+    fail_unless(limited.matches.size() == 1);
+    fail_unless(limited.matches[0].first == 0 && limited.matches[0].second == 0);
+    fail_unless(limited.unmatched_rows.size() == 1);
+    fail_unless(limited.unmatched_cols.size() == 1);
+
+    const auto rectangular = botsort::linear_assignment({{0.1F, 0.9F, 0.9F}, {0.9F, 0.2F, 0.9F}}, 0.5F);
+    fail_unless(rectangular.matches.size() == 2);
+    fail_unless(rectangular.matches[0].first == 0 && rectangular.matches[0].second == 0);
+    fail_unless(rectangular.matches[1].first == 1 && rectangular.matches[1].second == 1);
+    fail_unless(rectangular.unmatched_cols.size() == 1);
+}
+GST_END_TEST
+
+GST_START_TEST(test_linear_assignment_matches_python_lapjv_tie_break) {
+    const std::vector<std::vector<float>> cost = {
+        {0.1F, 0.1F},
+        {0.1F, 0.1F},
+    };
+    const auto result = botsort::linear_assignment(cost, 0.5F);
+    fail_unless(result.matches.size() == 2);
+    fail_unless(result.matches[0].first == 0 && result.matches[0].second == 1);
+    fail_unless(result.matches[1].first == 1 && result.matches[1].second == 0);
+}
+GST_END_TEST
+
 GST_START_TEST(test_linear_assignment_and_unmatched_rows) {
     std::vector<std::vector<float>> cost = {
         {0.1F, 0.8F},
@@ -63,6 +90,8 @@ GST_END_TEST
 
 void add_botsort_matching_tests(TCase *tc) {
     tcase_add_test(tc, test_iou_cost_and_class_compatibility);
+    tcase_add_test(tc, test_linear_assignment_matches_python_lapjv_limit_and_rectangular);
+    tcase_add_test(tc, test_linear_assignment_matches_python_lapjv_tie_break);
     tcase_add_test(tc, test_linear_assignment_and_unmatched_rows);
     tcase_add_test(tc, test_restore_input_order_places_detections_by_input_index);
 }
