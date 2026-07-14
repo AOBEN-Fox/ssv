@@ -56,6 +56,8 @@ if not onnx_dep.found()
   endif
 endif
 
+opencv_dep = dependency('opencv4', required : false)
+
 conf_data = configuration_data()
 conf_data.set_quoted('SSV_VERSION', meson.project_version())
 conf_data.set_quoted('SSV_PACKAGE_NAME', 'site-safety-vision')

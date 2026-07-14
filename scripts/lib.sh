@@ -120,6 +120,7 @@ export_ssv_plugin_path() {
     append_ld_path_if_dir "$SSV_ONNXRUNTIME_ROOT/lib"
     append_ld_path_if_dir "$SSV_TENSORRT_ROOT/usr/lib/x86_64-linux-gnu"
     append_ld_path_if_dir "$SSV_TENSORRT_ROOT/lib"
+    append_ld_path_if_dir "$SSV_TENSORRT_ROOT/TensorRT-11.1.0.106/lib"
     append_nvidia_wheel_libs
     export LD_LIBRARY_PATH="$SSV_LD_PATHS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 }
