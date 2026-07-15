@@ -17,6 +17,7 @@ extern void add_botsort_matching_tests(TCase *tc);
 extern void add_botsort_gmc_tests(TCase *tc);
 extern void add_botsort_tracker_tests(TCase *tc);
 extern void add_botsort_coordinate_tests(TCase *tc);
+extern void add_botsort_processor_tests(TCase *tc);
 extern void add_botsort_coordinate_tests(TCase *tc);
 
 static void assert_element_factory(const char *name) {
@@ -365,6 +366,7 @@ static Suite *ssv_gst_suite() {
     add_botsort_gmc_tests(tc);
     add_botsort_tracker_tests(tc);
     add_botsort_coordinate_tests(tc);
+    add_botsort_processor_tests(tc);
     tcase_add_test(tc, test_ssv_plugin_factories_are_registered);
     tcase_add_test(tc, test_ssvinfer_exposes_label_map_property);
     add_botsort_coordinate_tests(tc);

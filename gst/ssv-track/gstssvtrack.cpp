@@ -1,7 +1,5 @@
 #include "gstssvtrack.hpp"
-#include "botsort/botsort_tracker.hpp"
-#include "botsort/botsort_coordinates.hpp"
-#include "botsort/botsort_types.hpp"
+#include "botsort/botsort_processor.hpp"
 #include "ssv_logging.hpp"
 #include "ssv_meta.hpp"
 
@@ -13,47 +11,6 @@
 #include <vector>
 
 GST_DEBUG_CATEGORY_STATIC(ssv_track_debug);
-
-static botsort::Detection
-ssv_to_botsort_detection(const SsvDetection &src, int input_index) {
-    botsort::Detection det;
-    det.x1 = src.x1;
-    det.y1 = src.y1;
-    det.x2 = src.x2;
-    det.y2 = src.y2;
-    det.score = src.confidence;
-    det.class_id = src.class_id;
-    det.class_name = src.class_name;
-    det.input_index = input_index;
-    det.track_id = src.track_id;
-    det.track_state = static_cast<botsort::TrackState>(src.track_state);
-    det.occluded = src.occluded;
-    return det;
-}
-
-static botsort::FrameDetections
-ssv_to_botsort_detections(const std::vector<SsvDetection> &src, int width, int height) {
-    botsort::FrameDetections out;
-    out.reserve(src.size());
-    for (std::size_t i = 0; i < src.size(); ++i) {
-        out.push_back(botsort::to_pixel_detection(
-            ssv_to_botsort_detection(src[i], static_cast<int>(i)), width, height));
-    }
-    return out;
-}
-
-static void
-apply_botsort_results(std::vector<SsvDetection> &dst, const botsort::FrameDetections &src) {
-    for (const auto &det : src) {
-        if (det.input_index < 0) continue;
-        const std::size_t index = static_cast<std::size_t>(det.input_index);
-        if (index >= dst.size()) continue;
-        auto &out = dst[index];
-        out.track_id = det.track_id;
-        out.track_state = static_cast<int>(det.track_state);
-        out.occluded = det.occluded;
-    }
-}
 
 // ── GObject struct ─────────────────────────────────────────────────────
 struct _SsvTrack {
@@ -70,7 +27,7 @@ struct _SsvTrack {
     gchar *gmc_method;
     gint gmc_downscale;
 
-    botsort::BoTSortTracker *tracker;
+    botsort::BoTSortProcessor *processor;
     gint mock_next_id;
 };
 
@@ -134,7 +91,7 @@ ssv_track_start(GstBaseTransform *trans) {
         GST_INFO_OBJECT(self, "mock-track enabled (sequential IDs)");
     } else {
         const auto config = make_botsort_config(self);
-        self->tracker = new botsort::BoTSortTracker(config);
+        self->processor = new botsort::BoTSortProcessor(config);
         GST_INFO_OBJECT(self, "BoT-SORT tracker started (buffer=%d, match_thresh=%.2f, track_thresh=%.2f)",
             self->track_buffer, self->match_thresh, self->track_thresh);
     }
@@ -144,14 +101,13 @@ ssv_track_start(GstBaseTransform *trans) {
 static gboolean
 ssv_track_stop(GstBaseTransform *trans) {
     auto *self = SSV_TRACK(trans);
-    delete self->tracker;
-    self->tracker = nullptr;
+    delete self->processor;
+    self->processor = nullptr;
     return TRUE;
 }
 
 static GstFlowReturn
 ssv_track_transform_ip(GstBaseTransform *trans, GstBuffer *buf) {
-    (void)buf;
     auto *self = SSV_TRACK(trans);
 
     auto det = SsvDetectionStore::instance().take_for_tracking();
@@ -167,42 +123,36 @@ ssv_track_transform_ip(GstBaseTransform *trans, GstBuffer *buf) {
             d.track_state = SSV_TRACK_NEW;
             d.occluded = false;
         }
-    } else if (self->tracker) {
+    } else if (self->processor) {
         GstVideoInfo info;
         gst_video_info_init(&info);
         GstCaps *caps = gst_pad_get_current_caps(trans->sinkpad);
         const bool have_info = caps && gst_video_info_from_caps(&info, caps);
         const int frame_width = have_info ? GST_VIDEO_INFO_WIDTH(&info) : 0;
         const int frame_height = have_info ? GST_VIDEO_INFO_HEIGHT(&info) : 0;
-        auto input = ssv_to_botsort_detections(det.detections, frame_width, frame_height);
-        botsort::UpdateResult result;
-        bool frame_mapped = false;
+
+        const std::uint8_t *frame_data = nullptr;
+        std::size_t frame_stride = 0;
         GstVideoFrame frame;
+        bool frame_mapped = false;
         if (g_strcmp0(self->gmc_method, "none") != 0 && have_info &&
             gst_video_frame_map(&frame, &info, buf, GST_MAP_READ)) {
-            botsort::FrameView frame_view;
-            frame_view.data = static_cast<const std::uint8_t *>(GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
-            frame_view.width = GST_VIDEO_FRAME_WIDTH(&frame);
-            frame_view.height = GST_VIDEO_FRAME_HEIGHT(&frame);
-            frame_view.stride = static_cast<std::size_t>(GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0));
-            result = self->tracker->update(input, frame_view);
+            frame_data = static_cast<const std::uint8_t *>(
+                GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
+            frame_stride = static_cast<std::size_t>(
+                GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0));
             frame_mapped = true;
-        } else {
-            if (g_strcmp0(self->gmc_method, "none") != 0) {
-                GST_WARNING_OBJECT(self, "GMC frame unavailable, falling back to no-frame update");
-            }
-            result = self->tracker->update(input);
+        } else if (g_strcmp0(self->gmc_method, "none") != 0) {
+            GST_WARNING_OBJECT(self, "GMC frame unavailable, falling back to no-frame update");
         }
-        if (frame_mapped) {
+
+        self->processor->process(det.detections, frame_width, frame_height,
+                                 frame_data, frame_stride);
+
+        if (frame_mapped)
             gst_video_frame_unmap(&frame);
-        }
-        if (caps) {
+        if (caps)
             gst_caps_unref(caps);
-        }
-        for (auto &tracked : result.detections) {
-            tracked = botsort::to_normalized_detection(tracked, frame_width, frame_height);
-        }
-        apply_botsort_results(det.detections, result.detections);
         if (!det.detections.empty()) {
             GST_DEBUG_OBJECT(self, "frame %" G_GUINT64_FORMAT ": %zu tracked detections",
                 det.frame_id, det.detections.size());
@@ -301,8 +251,8 @@ ssv_track_get_property(GObject *object, guint prop_id,
 static void
 ssv_track_finalize(GObject *object) {
     auto *self = SSV_TRACK(object);
-    delete self->tracker;
-    self->tracker = nullptr;
+    delete self->processor;
+    self->processor = nullptr;
     g_free(self->gmc_method);
     self->gmc_method = nullptr;
     G_OBJECT_CLASS(ssv_track_parent_class)->finalize(object);
@@ -404,7 +354,7 @@ ssv_track_init(SsvTrack *self) {
     self->new_track_thresh = 0.7f;
     self->gmc_method = g_strdup("sparse-opt-flow");
     self->gmc_downscale = 2;
-    self->tracker = nullptr;
+    self->processor = nullptr;
     self->mock_next_id = 1;
 }
 
