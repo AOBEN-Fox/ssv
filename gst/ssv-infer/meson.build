@@ -24,7 +24,7 @@ else
   ssv_infer_sources += ['ssv_tensorrt_backend_stub.cpp']
 endif
 
-shared_library('gstssvinfer',
+ssv_infer_lib = shared_library('gstssvinfer',
   ssv_infer_sources,
   dependencies : ssv_infer_deps,
   cpp_args : ['-DPACKAGE="gstssvinfer"'],

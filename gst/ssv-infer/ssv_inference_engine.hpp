@@ -15,7 +15,7 @@ public:
     void stop();
     bool loaded() const { return backend_ != nullptr; }
 
-    SsvFrameDetections run(const SsvVideoFrame &frame);
+    SsvDetectionFrame run(const SsvVideoFrame &frame);
     BackendInfo backend_info() const;
 
 private:

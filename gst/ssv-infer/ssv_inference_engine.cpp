@@ -84,11 +84,12 @@ void InferenceEngine::stop()
     metadata_ = {};
 }
 
-SsvFrameDetections InferenceEngine::run(const SsvVideoFrame &frame)
+SsvDetectionFrame InferenceEngine::run(const SsvVideoFrame &frame)
 {
-    SsvFrameDetections detections;
+    SsvDetectionFrame detections;
     detections.frame_id = frame.frame_id;
-    std::snprintf(detections.source_id, sizeof(detections.source_id), "%s", frame.source_id.c_str());
+    detections.source_id = frame.source_id;
+    detections.timing = frame.timing;
 
     if (!backend_)
         return detections;

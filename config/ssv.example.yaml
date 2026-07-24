@@ -1,5 +1,6 @@
-# Site Safety Vision - 运行时配置文件
-# 本仓库只保留这一份 YAML 示例配置；本地覆盖推荐使用 config/ssv.yaml，也可用项目根目录 ssv.yaml 或 SSV_CONFIG_PATH。
+# Site Safety Vision - 运行时配置示例
+# 此文件只用于复制，不参与默认配置搜索。请复制为 config/ssv.yaml 或项目根目录 ssv.yaml 后再修改；
+# 也可以通过 SSV_CONFIG_PATH 显式指定任意运行配置文件。
 #
 # 环境变量覆盖 (优先级高于 YAML)，只保留适合部署和临时调试的少量变量:
 #   REDIS_HOST        → redis.host
@@ -43,12 +44,23 @@ sources: []
 display:
   # 是否开启 GStreamer 本地显示窗口
   enabled: false
-  # 是否默认开启检测框 overlay；当前仍为调试路径
+  # 是否默认开启检测框 overlay
   overlay: false
   # 显示分支帧率
   fps: 30
-  # 视频 sink 元素（autovideosink 自动选择，或指定 waylandsink/xvimagesink）
-  sink: "autovideosink"
+  # 视频 sink 元素；空值表示自动选择支持 sync 和 max-lateness 的具体 sink
+  sink: ""
+  # 当前帧完成后只保留最新等待帧，并按 pipeline clock 丢弃过迟帧
+  latest_frame: true
+  # 内置位图标签字体；face 支持 regular 或 bold，size 为 7..64 像素
+  overlay_font:
+    face: regular
+    size: 7
+  # 仅影响 ssvoverlay 展示，不回写 tracker、Redis、事件或证据
+  motion_prediction:
+    enabled: true
+    # 展示预测与 hold-last 的最大新鲜度时域，允许 1..300 ms
+    max_horizon_ms: 300
 
 # Pipeline 配置（M2 起使用）
 pipeline:

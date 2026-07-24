@@ -11,11 +11,12 @@ namespace botsort {
 class BoTSortProcessor {
 public:
     explicit BoTSortProcessor(TrackerConfig config);
-    void process(std::vector<SsvDetection> &detections,
-                 int frame_width,
-                 int frame_height,
-                 const std::uint8_t *frame_data = nullptr,
-                 std::size_t frame_stride = 0);
+    std::vector<SsvTrackedObject> process(
+        std::vector<SsvDetection> detections,
+        int frame_width,
+        int frame_height,
+        const std::uint8_t *frame_data = nullptr,
+        std::size_t frame_stride = 0);
 private:
     BoTSortTracker tracker_;
 };

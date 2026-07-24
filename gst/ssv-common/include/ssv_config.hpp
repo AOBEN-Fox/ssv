@@ -54,7 +54,7 @@ struct SsvConfig {
 };
 
 /// Load configuration from YAML file.
-/// Search order: explicit path → SSV_CONFIG_PATH env → ssv.yaml → config/ssv.yaml → config/ssv.example.yaml → /etc/ssv/ssv.yaml
+/// Search order: explicit path → SSV_CONFIG_PATH env → ssv.yaml → config/ssv.yaml → /etc/ssv/ssv.yaml
 /// Throws std::runtime_error if no config file found.
 SsvConfig ssv_config_load(const std::string& path = "");
 

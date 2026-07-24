@@ -1,5 +1,8 @@
 ssv_overlay_lib = shared_library('gstssvoverlay',
   'gstssvoverlay.cpp',
+  'overlay_motion_predictor.cpp',
+  'overlay_renderer.cpp',
+  'overlay_runtime.cpp',
   dependencies : [gst_deps, gst_base_dep, gst_video_dep, ssv_common_dep],
   cpp_args : ['-DPACKAGE="gstssvoverlay"'],
   install : true,

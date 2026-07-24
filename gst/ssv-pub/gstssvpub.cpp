@@ -9,21 +9,25 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <utility>
 
 GST_DEBUG_CATEGORY_STATIC(ssv_pub_debug);
 
 struct _SsvPub {
     GstBaseTransform parent;
 
+    gchar *source_id;
     gchar *redis_host;
     gint redis_port;
     gchar *stream_key;
 
     redisContext *redis_ctx;
+    SsvSourceMeta *meta;
 };
 
 enum {
     PROP_0,
+    PROP_SOURCE_ID,
     PROP_REDIS_HOST,
     PROP_REDIS_PORT,
     PROP_STREAM_KEY,
@@ -48,32 +52,42 @@ static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE(
 // ── Redis helpers ──────────────────────────────────────────────────────
 
 std::string
-ssv_pub_build_event_payload(const SsvFrameDetections &det, std::int64_t timestamp_ms) {
+ssv_pub_build_event_payload(const SsvTrackedFrame &frame, std::int64_t timestamp_ms) {
     using json = nlohmann::json;
 
     json detections_arr = json::array();
-    for (const auto &d : det.detections) {
+    for (const auto &object : frame.objects) {
+        const auto &d = object.detection;
         json det_obj = {
             {"class", d.class_name},
             {"class_id", d.class_id},
             {"confidence", d.confidence},
             {"bbox", {d.x1, d.y1, d.x2, d.y2}},
-            {"track_id", d.track_id},
-            {"track_state", d.track_state},
-            {"occluded", d.occluded}
+            {"track_id", object.track_id},
+            {"track_state", object.track_state},
+            {"occluded", object.occluded}
         };
         detections_arr.push_back(det_obj);
     }
 
     json msg = {
         {"type", "detection"},
-        {"source", det.source_id},
+        {"source", frame.source_id},
         {"timestamp_ms", timestamp_ms},
-        {"frame_id", det.frame_id},
+        {"frame_id", frame.frame_id},
         {"detections", detections_arr}
     };
 
     return msg.dump();
+}
+
+bool
+ssv_pub_snapshot_is_current(
+    std::string_view source_id,
+    const SsvTrackedFrame &frame)
+{
+    return !source_id.empty() && frame.source_id == source_id &&
+        ssv_meta(source_id)->generation() == frame.timing.generation;
 }
 
 static gboolean
@@ -102,11 +116,11 @@ ssv_pub_redis_connect(SsvPub *self) {
 }
 
 static void
-ssv_pub_redis_publish(SsvPub *self, const SsvFrameDetections &det) {
+ssv_pub_redis_publish(SsvPub *self, const SsvTrackedFrame &frame) {
     if (!self->redis_ctx)
         return;
 
-    std::string payload = ssv_pub_build_event_payload(det, std::time(nullptr) * 1000LL);
+    std::string payload = ssv_pub_build_event_payload(frame, std::time(nullptr) * 1000LL);
 
     auto *reply = (redisReply *)redisCommand(self->redis_ctx,
         "XADD %s * event %s",
@@ -123,7 +137,7 @@ ssv_pub_redis_publish(SsvPub *self, const SsvFrameDetections &det) {
     freeReplyObject(reply);
 
     GST_DEBUG_OBJECT(self, "published frame %" G_GUINT64_FORMAT " with %zu detections",
-        det.frame_id, det.detections.size());
+        frame.frame_id, frame.objects.size());
 }
 
 // ── GstBaseTransform callbacks ────────────────────────────────────────
@@ -131,6 +145,12 @@ ssv_pub_redis_publish(SsvPub *self, const SsvFrameDetections &det) {
 static gboolean
 ssv_pub_start(GstBaseTransform *trans) {
     auto *self = SSV_PUB(trans);
+    if (!self->source_id || self->source_id[0] == '\0') {
+        GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
+            ("source-id must not be empty"), (nullptr));
+        return FALSE;
+    }
+    self->meta = ssv_meta(self->source_id).get();
     return ssv_pub_redis_connect(self);
 }
 
@@ -141,6 +161,7 @@ ssv_pub_stop(GstBaseTransform *trans) {
         redisFree(self->redis_ctx);
         self->redis_ctx = nullptr;
     }
+    self->meta = nullptr;
     return TRUE;
 }
 
@@ -149,10 +170,19 @@ ssv_pub_transform_ip(GstBaseTransform *trans, GstBuffer *buf) {
     (void)buf;
     auto *self = SSV_PUB(trans);
 
-    auto det = SsvDetectionStore::instance().take();
-    if (!det.detections.empty()) {
-        ssv_pub_redis_publish(self, det);
+    if (!self->meta)
+        return GST_FLOW_OK;
+    auto consumed = self->meta->consume_tracked();
+    if (consumed.result != SsvMetaResult::Consumed || !consumed.frame)
+        return GST_FLOW_OK;
+
+    const auto snapshot = std::move(consumed.frame);
+    if (snapshot->objects.empty())
+        return GST_FLOW_OK;
+    if (!ssv_pub_snapshot_is_current(self->source_id, *snapshot)) {
+        return GST_FLOW_OK;
     }
+    ssv_pub_redis_publish(self, *snapshot);
 
     return GST_FLOW_OK;
 }
@@ -164,6 +194,10 @@ ssv_pub_set_property(GObject *object, guint prop_id,
                       const GValue *value, GParamSpec *pspec) {
     auto *self = SSV_PUB(object);
     switch (prop_id) {
+    case PROP_SOURCE_ID:
+        g_free(self->source_id);
+        self->source_id = g_value_dup_string(value);
+        break;
     case PROP_REDIS_HOST:
         g_free(self->redis_host);
         self->redis_host = g_value_dup_string(value);
@@ -185,6 +219,9 @@ ssv_pub_get_property(GObject *object, guint prop_id,
                       GValue *value, GParamSpec *pspec) {
     auto *self = SSV_PUB(object);
     switch (prop_id) {
+    case PROP_SOURCE_ID:
+        g_value_set_string(value, self->source_id);
+        break;
     case PROP_REDIS_HOST:
         g_value_set_string(value, self->redis_host);
         break;
@@ -204,6 +241,7 @@ ssv_pub_get_property(GObject *object, guint prop_id,
 static void
 ssv_pub_finalize(GObject *object) {
     auto *self = SSV_PUB(object);
+    g_free(self->source_id);
     g_free(self->redis_host);
     g_free(self->stream_key);
     if (self->redis_ctx)
@@ -220,6 +258,13 @@ ssv_pub_class_init(SsvPubClass *klass) {
     gobject_class->set_property = ssv_pub_set_property;
     gobject_class->get_property = ssv_pub_get_property;
     gobject_class->finalize = ssv_pub_finalize;
+
+    g_object_class_install_property(gobject_class, PROP_SOURCE_ID,
+        g_param_spec_string("source-id", "Source ID",
+            "Perception metadata source identifier",
+            "pipeline-0",
+            (GParamFlags)(G_PARAM_READWRITE | GST_PARAM_MUTABLE_READY |
+                          G_PARAM_STATIC_STRINGS)));
 
     g_object_class_install_property(gobject_class, PROP_REDIS_HOST,
         g_param_spec_string("redis-host", "Redis Host",
@@ -254,10 +299,12 @@ ssv_pub_class_init(SsvPubClass *klass) {
 
 static void
 ssv_pub_init(SsvPub *self) {
+    self->source_id = g_strdup("pipeline-0");
     self->redis_host = g_strdup("localhost");
     self->redis_port = 6379;
     self->stream_key = g_strdup("ssv:events");
     self->redis_ctx = nullptr;
+    self->meta = nullptr;
 }
 
 // ── Plugin registration ────────────────────────────────────────────────

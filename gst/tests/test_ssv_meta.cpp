@@ -1,522 +1,291 @@
 #include "ssv_meta.hpp"
 
+#include <atomic>
 #include <cassert>
-#include <cmath>
-#include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <memory>
+#include <stdexcept>
 #include <string>
+#include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
 
-#include <nlohmann/json.hpp>
+namespace {
 
-std::string ssv_pub_build_event_payload(const SsvFrameDetections &det, std::int64_t timestamp_ms);
-bool ssv_overlay_glyph_is_supported(char c);
+SsvDetection make_detection(float x1 = 0.1F)
+{
+    SsvDetection detection;
+    std::snprintf(detection.class_name, sizeof(detection.class_name), "person");
+    detection.confidence = 0.9F;
+    detection.x1 = x1;
+    detection.y1 = 0.2F;
+    detection.x2 = x1 + 0.2F;
+    detection.y2 = 0.4F;
+    detection.class_id = 0;
+    return detection;
+}
 
-static SsvFrameDetections make_detection(guint64 frame_id, int track_id = -1) {
-    SsvFrameDetections frame;
+SsvDetectionFrame make_detection_frame(
+    std::string source_id,
+    GstClockTime pts,
+    std::uint64_t generation = 1,
+    std::uint64_t frame_id = 0)
+{
+    SsvDetectionFrame frame;
     frame.frame_id = frame_id;
-    std::snprintf(frame.source_id, sizeof(frame.source_id), "unit-test");
-
-    SsvDetection det{};
-    std::snprintf(det.class_name, sizeof(det.class_name), "person");
-    det.confidence = 0.9f;
-    det.x1 = 0.1f;
-    det.y1 = 0.2f;
-    det.x2 = 0.3f;
-    det.y2 = 0.4f;
-    det.class_id = 0;
-    det.track_id = track_id;
-    frame.detections.push_back(det);
+    frame.source_id = std::move(source_id);
+    frame.timing = {pts, GST_SECOND / 5, generation};
+    frame.detections.push_back(make_detection());
     return frame;
 }
 
-/// Assert that det is valid and has the given track_id.
-static void assert_detection_track_id(const SsvDetection &det, int expected_track_id) {
-    assert(std::isfinite(det.confidence));
-    assert(det.confidence >= 0.0f && det.confidence <= 1.0f);
-    assert(det.track_id == expected_track_id);
+std::vector<SsvTrackedObject> make_tracked_objects()
+{
+    SsvTrackedObject object;
+    object.detection = make_detection();
+    object.track_id = 7;
+    object.track_state = SSV_TRACK_MATCHED;
+    return {object};
 }
 
-/// Assert tracking metadata fields (track_id, track_state, occluded).
-static void assert_detection_tracking_state(const SsvDetection &det,
-                                            int expected_track_id,
-                                            int expected_track_state,
-                                            bool expected_occluded) {
-    assert_detection_track_id(det, expected_track_id);
-    assert(det.track_state == expected_track_state);
-    assert(det.occluded == expected_occluded);
+std::shared_ptr<SsvSourceMeta> initialized_source(
+    std::string_view source_id)
+{
+    auto source = std::make_shared<SsvSourceMeta>(source_id);
+    SsvTimelineCursor timeline(source);
+    const auto update = timeline.on_segment({0, 0, 0, 1.0});
+    assert(update.generation == 1);
+    return source;
 }
 
-static void assert_single_detection(const SsvFrameDetections &frame,
-                                    float x1, float y1, float x2, float y2,
-                                    int class_id, int track_id) {
-    assert(frame.detections.size() == 1);
-    const auto &det = frame.detections[0];
-    assert(std::fabs(det.x1 - x1) < 0.0001f);
-    assert(std::fabs(det.y1 - y1) < 0.0001f);
-    assert(std::fabs(det.x2 - x2) < 0.0001f);
-    assert(std::fabs(det.y2 - y2) < 0.0001f);
-    assert(det.class_id == class_id);
-    assert(det.track_id == track_id);
+void test_detection_transfer_is_move_only_bounded_and_source_safe()
+{
+    auto source = initialized_source("camera-01");
+
+    auto no_pts = make_detection_frame("camera-01", GST_CLOCK_TIME_NONE);
+    assert(source->publish_detection(std::move(no_pts)) ==
+           SsvMetaResult::NoPts);
+
+    auto wrong_source = make_detection_frame("camera-02", GST_SECOND);
+    assert(source->publish_detection(std::move(wrong_source)) ==
+           SsvMetaResult::WrongSource);
+    auto wrong_generation = make_detection_frame("camera-01", GST_SECOND, 2);
+    assert(source->publish_detection(std::move(wrong_generation)) ==
+           SsvMetaResult::WrongGeneration);
+
+    auto valid = make_detection_frame("camera-01", GST_SECOND, 1, 0);
+    const auto *storage = valid.detections.data();
+    assert(source->publish_detection(std::move(valid)) ==
+           SsvMetaResult::Published);
+    auto occupied = make_detection_frame("camera-01", 2 * GST_SECOND, 1, 2);
+    assert(source->publish_detection(std::move(occupied)) ==
+           SsvMetaResult::Occupied);
+
+    auto consumed = source->consume_detection();
+    assert(consumed.result == SsvMetaResult::Consumed);
+    assert(consumed.frame->frame_id == 0);
+    assert(consumed.frame->detections.data() == storage);
+
+    auto duplicate = make_detection_frame("camera-01", GST_SECOND, 1, 3);
+    auto stale = make_detection_frame("camera-01", GST_SECOND / 2, 1, 4);
+    assert(source->publish_detection(std::move(duplicate)) ==
+           SsvMetaResult::DuplicatePts);
+    assert(source->publish_detection(std::move(stale)) ==
+           SsvMetaResult::StalePts);
 }
 
-static void test_detection_normalizes_valid_detection() {
-    auto frame = make_detection(30);
-    auto det = frame.detections[0];
-
-    bool kept = ssv_normalize_detection(det);
-
-    assert(kept);
-    assert(std::fabs(det.confidence - 0.9f) < 0.0001f);
-    assert(std::fabs(det.x1 - 0.1f) < 0.0001f);
-    assert(std::fabs(det.y1 - 0.2f) < 0.0001f);
-    assert(std::fabs(det.x2 - 0.3f) < 0.0001f);
-    assert(std::fabs(det.y2 - 0.4f) < 0.0001f);
-    assert(det.class_id == 0);
-    assert(det.track_id == -1);
-}
-
-static void test_detection_clamps_slightly_out_of_bounds_bbox() {
-    auto frame = make_detection(31);
-    auto det = frame.detections[0];
-    det.x1 = -0.01f;
-    det.y1 = -0.02f;
-    det.x2 = 1.01f;
-    det.y2 = 1.02f;
-
-    bool kept = ssv_normalize_detection(det);
-
-    assert(kept);
-    assert(std::fabs(det.x1 - 0.0f) < 0.0001f);
-    assert(std::fabs(det.y1 - 0.0f) < 0.0001f);
-    assert(std::fabs(det.x2 - 1.0f) < 0.0001f);
-    assert(std::fabs(det.y2 - 1.0f) < 0.0001f);
-}
-
-static void test_detection_rejects_invalid_numbers() {
-    auto nan_det = make_detection(32).detections[0];
-    nan_det.x1 = std::numeric_limits<float>::quiet_NaN();
-    assert(!ssv_normalize_detection(nan_det));
-
-    auto inf_det = make_detection(33).detections[0];
-    inf_det.confidence = std::numeric_limits<float>::infinity();
-    assert(!ssv_normalize_detection(inf_det));
-
-    auto high_conf = make_detection(34).detections[0];
-    high_conf.confidence = 1.01f;
-    assert(!ssv_normalize_detection(high_conf));
-
-    auto low_conf = make_detection(35).detections[0];
-    low_conf.confidence = -0.01f;
-    assert(!ssv_normalize_detection(low_conf));
-}
-
-static void test_detection_rejects_empty_bbox_after_clamp() {
-    auto det = make_detection(36).detections[0];
-    det.x1 = -0.2f;
-    det.y1 = 0.2f;
-    det.x2 = -0.1f;
-    det.y2 = 0.4f;
-
-    assert(!ssv_normalize_detection(det));
-}
-
-static void test_detection_normalizes_invalid_negative_ids() {
-    auto det = make_detection(37).detections[0];
-    det.class_id = -9;
-    det.track_id = -3;
-
-    bool kept = ssv_normalize_detection(det);
-
-    assert(kept);
-    assert(det.class_id == -1);
-    assert(det.track_id == -1);
-}
-
-static void test_detection_normalizes_invalid_track_state() {
-    auto det = make_detection(38).detections[0];
-    det.track_state = -1;
-    assert(ssv_normalize_detection(det));
-    assert(det.track_state == SSV_TRACK_NEW);
-
-    det.track_state = 99;
-    assert(ssv_normalize_detection(det));
-    assert(det.track_state == SSV_TRACK_NEW);
-}
-
-static void test_detection_store_tracking_flow() {
-    auto &store = SsvDetectionStore::instance();
-    (void)store.take();
-    (void)store.take_for_tracking();
-
-    store.set(make_detection(10));
-    auto for_tracking = store.take_for_tracking();
-    assert(for_tracking.frame_id == 10);
-    assert(for_tracking.detections.size() == 1);
-    assert(for_tracking.detections[0].track_id == -1);
-
-    for_tracking.detections[0].track_id = 7;
-    store.set_tracked(std::move(for_tracking));
-
-    auto latest = store.peek_latest();
-    assert(latest.frame_id == 10);
-    assert(latest.detections.size() == 1);
-    assert(latest.detections[0].track_id == 7);
-
-    auto published = store.take();
-    assert(published.frame_id == 10);
-    assert(published.detections.size() == 1);
-    assert(published.detections[0].track_id == 7);
-
-    latest = store.peek_latest();
-    assert(latest.frame_id == 10);
-    assert(latest.detections.size() == 1);
-}
-
-static void test_detection_store_overwrites_stale_detection() {
-    auto &store = SsvDetectionStore::instance();
-    (void)store.take();
-    (void)store.take_for_tracking();
-
-    store.set(make_detection(20));
-    store.set(make_detection(21));
-
-    auto for_tracking = store.take_for_tracking();
-    assert(for_tracking.frame_id == 21);
-}
-
-static void test_detection_store_filters_invalid_detection() {
-    auto &store = SsvDetectionStore::instance();
-    (void)store.take();
-    (void)store.take_for_tracking();
-
-    auto frame = make_detection(40);
-    auto invalid = frame.detections[0];
-    invalid.x1 = 0.8f;
-    invalid.x2 = 0.7f;
-    frame.detections.push_back(invalid);
-
-    store.set(std::move(frame));
-
-    auto for_tracking = store.take_for_tracking();
-    assert(for_tracking.frame_id == 40);
-    assert_single_detection(for_tracking, 0.1f, 0.2f, 0.3f, 0.4f, 0, -1);
-}
-
-// ── M2/B: Tracking metadata contract tests ─────────────────────────────
-
-static void test_track_id_write_back_multiple_detections() {
-    auto &store = SsvDetectionStore::instance();
-    (void)store.take();
-    (void)store.take_for_tracking();
-
-    // Two detections in one frame
-    SsvFrameDetections frame;
-    frame.frame_id = 100;
-    std::snprintf(frame.source_id, sizeof(frame.source_id), "track-test");
-
-    SsvDetection det1{};
-    std::snprintf(det1.class_name, sizeof(det1.class_name), "person");
-    det1.confidence = 0.9f;
-    det1.x1 = 0.1f; det1.y1 = 0.2f; det1.x2 = 0.3f; det1.y2 = 0.4f;
-    det1.class_id = 0;
-
-    SsvDetection det2{};
-    std::snprintf(det2.class_name, sizeof(det2.class_name), "helmet");
-    det2.confidence = 0.8f;
-    det2.x1 = 0.5f; det2.y1 = 0.5f; det2.x2 = 0.7f; det2.y2 = 0.8f;
-    det2.class_id = 1;
-
-    frame.detections.push_back(det1);
-    frame.detections.push_back(det2);
-    store.set(std::move(frame));
-
-    // Simulate ssvtrack: take for tracking, assign track_ids, write back
-    auto for_tracking = store.take_for_tracking();
-    assert(for_tracking.frame_id == 100);
-    assert(for_tracking.detections.size() == 2);
-    assert_detection_tracking_state(for_tracking.detections[0], -1, SSV_TRACK_NEW, false);
-    assert_detection_tracking_state(for_tracking.detections[1], -1, SSV_TRACK_NEW, false);
-
-    // ssvtrack assigns track IDs with state/occlusion
-    for_tracking.detections[0].track_id = 5;
-    for_tracking.detections[0].track_state = SSV_TRACK_MATCHED;
-    for_tracking.detections[0].occluded = false;
-    for_tracking.detections[1].track_id = 7;
-    for_tracking.detections[1].track_state = SSV_TRACK_NEW;
-    for_tracking.detections[1].occluded = true;
-    store.set_tracked(std::move(for_tracking));
-
-    // ssvpub: take for publishing
-    auto tracked = store.take();
-    assert(tracked.frame_id == 100);
-    assert(tracked.detections.size() == 2);
-    assert_detection_tracking_state(tracked.detections[0], 5, SSV_TRACK_MATCHED, false);
-    assert_detection_tracking_state(tracked.detections[1], 7, SSV_TRACK_NEW, true);
-}
-
-static void test_track_id_default_preserved() {
-    auto &store = SsvDetectionStore::instance();
-    (void)store.take();
-    (void)store.take_for_tracking();
-
-    store.set(make_detection(110));
-
-    auto for_tracking = store.take_for_tracking();
-    assert(for_tracking.frame_id == 110);
-    assert(for_tracking.detections.size() == 1);
-    // Untracked default: track_id=-1, state=NEW(0), occluded=false
-    assert_detection_tracking_state(for_tracking.detections[0], -1, SSV_TRACK_NEW, false);
-
-    // Simulate ssvtrack returning data without touching track_id/state/occluded
-    store.set_tracked(std::move(for_tracking));
-
-    auto tracked = store.take();
-    assert(tracked.frame_id == 110);
-    assert(tracked.detections.size() == 1);
-    assert_detection_tracking_state(tracked.detections[0], -1, SSV_TRACK_NEW, false);
-}
-
-static void test_store_skips_set_when_has_tracks() {
-    auto &store = SsvDetectionStore::instance();
-    (void)store.take();
-    (void)store.take_for_tracking();
-
-    // Put one frame into HAS_TRACKS with full tracking state
-    store.set(make_detection(120));
-    auto f = store.take_for_tracking();
-    f.detections[0].track_id = 42;
-    f.detections[0].track_state = SSV_TRACK_MATCHED;
-    f.detections[0].occluded = true;
-    store.set_tracked(std::move(f));
-
-    // Now try to set a new detection — should be skipped (HAS_TRACKS protected)
-    store.set(make_detection(121));
-
-    // take() should still return frame 120 with unchanged tracking state
-    auto result = store.take();
-    assert(result.frame_id == 120);
-    assert(result.detections.size() == 1);
-    assert_detection_tracking_state(result.detections[0], 42, SSV_TRACK_MATCHED, true);
-}
-
-static void test_take_for_tracking_returns_empty_on_wrong_state() {
-    auto &store = SsvDetectionStore::instance();
-    (void)store.take();
-    (void)store.take_for_tracking();
-
-    // EMPTY state → take_for_tracking returns empty
-    auto empty1 = store.take_for_tracking();
-    assert(empty1.detections.empty());
-
-    // Set to HAS_DETECTIONS, then take_for_tracking → consumes
-    store.set(make_detection(130));
-    auto consumed = store.take_for_tracking();
-    assert(consumed.frame_id == 130);
-
-    // Back to EMPTY, second take_for_tracking returns empty
-    auto empty2 = store.take_for_tracking();
-    assert(empty2.detections.empty());
-}
-
-static void test_take_returns_empty_on_wrong_state() {
-    auto &store = SsvDetectionStore::instance();
-    (void)store.take();
-    (void)store.take_for_tracking();
-
-    // EMPTY state → take returns empty
-    auto empty = store.take();
-    assert(empty.detections.empty());
-}
-
-static void test_set_tracked_filters_invalid_detections() {
-    auto &store = SsvDetectionStore::instance();
-    (void)store.take();
-    (void)store.take_for_tracking();
-
-    SsvFrameDetections frame;
-    frame.frame_id = 140;
-    std::snprintf(frame.source_id, sizeof(frame.source_id), "track-test");
-
-    // One valid detection with full tracking state
-    SsvDetection valid{};
-    std::snprintf(valid.class_name, sizeof(valid.class_name), "person");
-    valid.confidence = 0.9f;
-    valid.x1 = 0.1f; valid.y1 = 0.2f; valid.x2 = 0.3f; valid.y2 = 0.4f;
-    valid.class_id = 0;
-    valid.track_id = 99;
-    valid.track_state = SSV_TRACK_MATCHED;
-    valid.occluded = false;
-
-    // One invalid detection (NaN bbox) with track_id
-    SsvDetection invalid{};
-    std::snprintf(invalid.class_name, sizeof(invalid.class_name), "helmet");
-    invalid.confidence = 0.8f;
+void test_publish_normalizes_results_without_exposing_meta_helpers()
+{
+    auto source = initialized_source("camera-01");
+    auto detections = make_detection_frame("camera-01", GST_SECOND);
+    detections.detections.front().x1 = -0.1F;
+    detections.detections.front().x2 = 1.1F;
+    auto invalid = make_detection();
     invalid.x1 = std::numeric_limits<float>::quiet_NaN();
-    invalid.y1 = 0.5f; invalid.x2 = 0.7f; invalid.y2 = 0.8f;
-    invalid.class_id = 1;
-    invalid.track_id = 77;
-    invalid.track_state = SSV_TRACK_NEW;
-    invalid.occluded = true;
+    detections.detections.push_back(invalid);
+    auto infinite_confidence = make_detection();
+    infinite_confidence.confidence = std::numeric_limits<float>::infinity();
+    detections.detections.push_back(infinite_confidence);
+    auto high_confidence = make_detection();
+    high_confidence.confidence = 1.01F;
+    detections.detections.push_back(high_confidence);
+    auto outside = make_detection();
+    outside.x1 = -0.2F;
+    outside.x2 = -0.1F;
+    detections.detections.push_back(outside);
+    detections.detections.front().class_id = -9;
 
-    frame.detections.push_back(valid);
-    frame.detections.push_back(invalid);
-    store.set_tracked(std::move(frame));
+    assert(source->publish_detection(std::move(detections)) ==
+           SsvMetaResult::Published);
+    auto normalized = source->consume_detection();
+    assert(normalized.frame->detections.size() == 1);
+    assert(normalized.frame->detections.front().x1 == 0.0F);
+    assert(normalized.frame->detections.front().x2 == 1.0F);
+    assert(normalized.frame->detections.front().class_id == -1);
 
-    auto result = store.take();
-    assert(result.frame_id == 140);
-    assert(result.detections.size() == 1);
-    assert_detection_tracking_state(result.detections[0], 99, SSV_TRACK_MATCHED, false);
+    auto objects = make_tracked_objects();
+    objects.front().track_id = -9;
+    objects.front().track_state = static_cast<SsvTrackState>(99);
+    SsvTrackedObject invalid_object;
+    invalid_object.detection = make_detection();
+    invalid_object.detection.y2 = invalid_object.detection.y1;
+    objects.push_back(invalid_object);
+
+    assert(source->publish_tracked(
+               std::move(*normalized.frame), std::move(objects)) ==
+           SsvMetaResult::Published);
+    auto tracked = source->consume_tracked();
+    assert(tracked.frame->objects.size() == 1);
+    assert(tracked.frame->objects.front().track_id == -1);
+    assert(tracked.frame->objects.front().track_state == SSV_TRACK_NEW);
 }
 
-static void test_set_tracked_with_empty_detections() {
-    auto &store = SsvDetectionStore::instance();
-    (void)store.take();
-    (void)store.take_for_tracking();
+void test_tracked_publish_shares_one_snapshot_and_is_atomic()
+{
+    auto source = initialized_source("camera-01");
+    auto first = make_detection_frame("camera-01", GST_SECOND, 1, 10);
+    assert(source->publish_tracked(std::move(first), make_tracked_objects()) ==
+           SsvMetaResult::Published);
 
-    // set_tracked with empty detections list
-    SsvFrameDetections frame;
-    frame.frame_id = 150;
-    std::snprintf(frame.source_id, sizeof(frame.source_id), "empty-track");
+    auto history = source->latest_tracked_at_or_before(GST_SECOND);
+    auto publication = source->consume_tracked();
+    assert(publication.result == SsvMetaResult::Consumed);
+    assert(history != nullptr);
+    assert(publication.frame.get() == history.get());
 
-    store.set_tracked(std::move(frame));
-
-    // State should be HAS_TRACKS → take() returns the frame
-    auto result = store.take();
-    assert(result.frame_id == 150);
-    assert(result.detections.empty());
+    auto second = make_detection_frame("camera-01", 2 * GST_SECOND, 1, 11);
+    assert(source->publish_tracked(std::move(second), make_tracked_objects()) ==
+           SsvMetaResult::Published);
+    auto blocked = make_detection_frame("camera-01", 3 * GST_SECOND, 1, 12);
+    assert(source->publish_tracked(std::move(blocked), make_tracked_objects()) ==
+           SsvMetaResult::Occupied);
+    auto still_second = source->latest_tracked_at_or_before(4 * GST_SECOND);
+    assert(still_second != nullptr && still_second->frame_id == 11);
 }
 
-static void test_overlay_independent_after_take() {
-    auto &store = SsvDetectionStore::instance();
-    (void)store.take();
-    (void)store.take_for_tracking();
-
-    store.set(make_detection(160));
-    auto f = store.take_for_tracking();
-    f.detections[0].track_id = 88;
-    f.detections[0].track_state = SSV_TRACK_MATCHED;
-    f.detections[0].occluded = false;
-    store.set_tracked(std::move(f));
-
-    // peek_latest before take — tracking state preserved
-    auto before = store.peek_latest();
-    assert(before.frame_id == 160);
-    assert(before.detections.size() == 1);
-    assert_detection_tracking_state(before.detections[0], 88, SSV_TRACK_MATCHED, false);
-
-    // take() consumes the data from current_, but not overlay_current_
-    auto consumed = store.take();
-    assert(consumed.frame_id == 160);
-    assert_detection_tracking_state(consumed.detections[0], 88, SSV_TRACK_MATCHED, false);
-
-    // peek_latest still has the overlay copy with tracking state
-    auto after = store.peek_latest();
-    assert(after.frame_id == 160);
-    assert(after.detections.size() == 1);
-    assert_detection_tracking_state(after.detections[0], 88, SSV_TRACK_MATCHED, false);
-}
-
-static void test_overlay_publishes_only_complete_tracked_snapshots() {
-    auto &store = SsvDetectionStore::instance();
-    (void)store.take();
-    (void)store.take_for_tracking();
-
-    store.set(make_detection(180));
-    auto tracked = store.take_for_tracking();
-    tracked.detections[0].track_id = 91;
-    tracked.detections[0].track_state = SSV_TRACK_MATCHED;
-    store.set_tracked(std::move(tracked));
-    (void)store.take();
-
-    store.set(make_detection(181));
-
-    auto latest = store.peek_latest();
-    assert(latest.frame_id == 180);
-    assert(latest.detections.size() == 1);
-    assert_detection_tracking_state(
-        latest.detections[0], 91, SSV_TRACK_MATCHED, false);
-
-    tracked = store.take_for_tracking();
-    assert(tracked.frame_id == 181);
-    tracked.detections[0].track_id = 92;
-    tracked.detections[0].track_state = SSV_TRACK_NEW;
-    store.set_tracked(std::move(tracked));
-
-    latest = store.peek_latest();
-    assert(latest.frame_id == 181);
-    assert(latest.detections.size() == 1);
-    assert_detection_tracking_state(latest.detections[0], 92, SSV_TRACK_NEW, false);
-
-    SsvFrameDetections empty;
-    empty.frame_id = 182;
-    std::snprintf(empty.source_id, sizeof(empty.source_id), "unit-test");
-    store.set_tracked(std::move(empty));
-
-    latest = store.peek_latest();
-    assert(latest.frame_id == 182);
-    assert(latest.detections.empty());
-}
-
-static void test_pub_payload_serializes_tracking_metadata() {
-    SsvFrameDetections frame;
-    frame.frame_id = 170;
-    std::snprintf(frame.source_id, sizeof(frame.source_id), "pub-test");
-
-    SsvDetection det{};
-    std::snprintf(det.class_name, sizeof(det.class_name), "person");
-    det.confidence = 0.72f;
-    det.x1 = 0.1f; det.y1 = 0.2f; det.x2 = 0.3f; det.y2 = 0.4f;
-    det.class_id = 0;
-    det.track_id = 12;
-    det.track_state = SSV_TRACK_MATCHED;
-    det.occluded = true;
-    frame.detections.push_back(det);
-
-    auto payload = ssv_pub_build_event_payload(frame, 1234567890LL);
-    auto msg = nlohmann::json::parse(payload);
-
-    assert(msg["type"] == "detection");
-    assert(msg["source"] == "pub-test");
-    assert(msg["timestamp_ms"] == 1234567890LL);
-    assert(msg["frame_id"] == 170);
-    assert(msg["detections"].size() == 1);
-
-    const auto &serialized = msg["detections"][0];
-    assert(serialized["track_id"] == 12);
-    assert(serialized["track_state"] == SSV_TRACK_MATCHED);
-    assert(serialized["occluded"] == true);
-}
-
-static void test_overlay_tracking_label_glyphs_supported() {
-    const char *label = "person #5[No] 0.92";
-    for (const char *p = label; *p; ++p) {
-        assert(ssv_overlay_glyph_is_supported(*p));
+void test_history_is_causal_bounded_and_preserves_empty_snapshot()
+{
+    auto source = initialized_source("camera-01");
+    for (std::uint64_t index = 0; index < 70; ++index) {
+        auto frame = make_detection_frame(
+            "camera-01", index * 10 * GST_MSECOND, 1, index);
+        assert(source->publish_tracked(std::move(frame), make_tracked_objects()) ==
+               SsvMetaResult::Published);
+        assert(source->consume_tracked().result == SsvMetaResult::Consumed);
     }
+    assert(source->history_depth() == 64);
+    assert(source->latest_tracked_at_or_before(40 * GST_MSECOND) == nullptr);
+    auto causal = source->latest_tracked_at_or_before(650 * GST_MSECOND);
+    assert(causal != nullptr && causal->frame_id == 65);
+    assert(source->latest_tracked_at_or_before(5 * GST_MSECOND) == nullptr);
+    assert(source->latest_tracked_at_or_before(GST_CLOCK_TIME_NONE) == nullptr);
+
+    auto empty = make_detection_frame("camera-01", 3 * GST_SECOND, 1, 80);
+    assert(source->publish_tracked(std::move(empty), {}) ==
+           SsvMetaResult::Published);
+    assert(source->consume_tracked().result == SsvMetaResult::Consumed);
+    auto cleared = source->latest_tracked_at_or_before(3 * GST_SECOND);
+    assert(cleared != nullptr && cleared->objects.empty());
+    assert(source->history_depth() == 1);
 }
 
-void run_ssv_meta_tests() {
-    // M1/B tests (detection normalization)
-    test_detection_normalizes_valid_detection();
-    test_detection_clamps_slightly_out_of_bounds_bbox();
-    test_detection_rejects_invalid_numbers();
-    test_detection_rejects_empty_bbox_after_clamp();
-    test_detection_normalizes_invalid_negative_ids();
-    test_detection_normalizes_invalid_track_state();
-    test_detection_store_tracking_flow();
-    test_detection_store_overwrites_stale_detection();
-    test_detection_store_filters_invalid_detection();
+void test_reset_hides_old_generation_and_clears_both_stages()
+{
+    auto source = std::make_shared<SsvSourceMeta>("camera-01");
+    SsvTimelineCursor timeline(source);
+    timeline.on_segment({0, 0, 0, 1.0});
 
-    // M2/B tests (tracking metadata contract)
-    test_track_id_write_back_multiple_detections();
-    test_track_id_default_preserved();
-    test_store_skips_set_when_has_tracks();
-    test_take_for_tracking_returns_empty_on_wrong_state();
-    test_take_returns_empty_on_wrong_state();
-    test_set_tracked_filters_invalid_detections();
-    test_set_tracked_with_empty_detections();
-    test_overlay_independent_after_take();
-    test_overlay_publishes_only_complete_tracked_snapshots();
-    test_pub_payload_serializes_tracking_metadata();
-    test_overlay_tracking_label_glyphs_supported();
+    auto detection = make_detection_frame("camera-01", GST_SECOND, 1, 4);
+    assert(source->publish_detection(std::move(detection)) ==
+           SsvMetaResult::Published);
+    auto tracked = make_detection_frame("camera-01", GST_SECOND, 1, 4);
+    assert(source->publish_tracked(std::move(tracked), make_tracked_objects()) ==
+           SsvMetaResult::Published);
+    auto held = source->latest_tracked_at_or_before(GST_SECOND);
+    assert(held != nullptr);
+
+    const auto reset = timeline.on_lifecycle_reset();
+    assert(reset.generation == 2);
+    assert(source->consume_detection().result == SsvMetaResult::Empty);
+    assert(source->consume_tracked().result == SsvMetaResult::Empty);
+    assert(source->latest_tracked_at_or_before(GST_SECOND) == nullptr);
+    assert(held->timing.generation == 1);
+    assert(source->stats().generation_resets == 2);
+}
+
+void test_concurrent_history_queries_keep_shared_snapshots_alive()
+{
+    auto source = initialized_source("camera-01");
+    std::atomic<bool> done = false;
+    std::atomic<std::uint64_t> reads = 0;
+    std::thread consumer([&] {
+        while (!done.load(std::memory_order_acquire)) {
+            auto snapshot = source->latest_tracked_at_or_before(
+                1000 * GST_SECOND);
+            if (snapshot)
+                reads.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
+    for (std::uint64_t index = 1; index <= 200; ++index) {
+        auto frame = make_detection_frame(
+            "camera-01", index * GST_MSECOND, 1, index);
+        while (source->publish_tracked(
+                   std::move(frame), make_tracked_objects()) ==
+               SsvMetaResult::Occupied) {
+            source->consume_tracked();
+        }
+        source->consume_tracked();
+    }
+    done.store(true, std::memory_order_release);
+    consumer.join();
+    assert(reads.load(std::memory_order_relaxed) > 0);
+}
+
+void test_registry_is_source_scoped_and_rejects_empty_source()
+{
+    auto camera_a = ssv_meta("meta-registry-camera-a");
+    SsvTimelineCursor timeline_a(camera_a);
+    timeline_a.on_segment({0, 0, 0, 1.0});
+    auto camera_b = ssv_meta("meta-registry-camera-b");
+    SsvTimelineCursor timeline_b(camera_b);
+    timeline_b.on_segment({0, 0, 0, 1.0});
+    assert(ssv_meta("meta-registry-camera-a").get() == camera_a.get());
+
+    auto detection_a = make_detection_frame(
+        "meta-registry-camera-a", GST_SECOND);
+    auto detection_b = make_detection_frame(
+        "meta-registry-camera-b", GST_SECOND);
+    assert(camera_a->publish_detection(std::move(detection_a)) ==
+           SsvMetaResult::Published);
+    assert(camera_b->publish_detection(std::move(detection_b)) ==
+           SsvMetaResult::Published);
+
+    timeline_a.on_lifecycle_reset();
+    assert(camera_a->consume_detection().result == SsvMetaResult::Empty);
+    assert(camera_b->consume_detection().result == SsvMetaResult::Consumed);
+
+    bool rejected = false;
+    try {
+        ssv_meta("");
+    } catch (const std::invalid_argument &) {
+        rejected = true;
+    }
+    assert(rejected);
+}
+
+} // namespace
+
+int main()
+{
+    test_detection_transfer_is_move_only_bounded_and_source_safe();
+    test_publish_normalizes_results_without_exposing_meta_helpers();
+    test_tracked_publish_shares_one_snapshot_and_is_atomic();
+    test_history_is_causal_bounded_and_preserves_empty_snapshot();
+    test_reset_hides_old_generation_and_clears_both_stages();
+    test_concurrent_history_queries_keep_shared_snapshots_alive();
+    test_registry_is_source_scoped_and_rejects_empty_source();
+    return 0;
 }

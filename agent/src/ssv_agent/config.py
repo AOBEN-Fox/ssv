@@ -84,7 +84,7 @@ def _apply_env_overrides(cfg: SsvConfig) -> None:
 def load_config(path: str | Path | None = None) -> SsvConfig:
     """Load configuration from YAML file.
 
-    Search order: explicit path -> SSV_CONFIG_PATH env -> ssv.yaml -> config/ssv.yaml -> config/ssv.example.yaml -> defaults.
+    Search order: explicit path -> SSV_CONFIG_PATH env -> ssv.yaml -> config/ssv.yaml -> defaults.
     Environment variables REDIS_HOST and REDIS_PORT override corresponding YAML values.
     """
     cfg: SsvConfig | None = None
@@ -116,13 +116,6 @@ def load_config(path: str | Path | None = None) -> SsvConfig:
         config_local = Path("config/ssv.yaml")
         if config_local.exists():
             with open(config_local) as f:
-                data = yaml.safe_load(f) or {}
-            cfg = SsvConfig.model_validate(data)
-
-    if cfg is None:
-        relative = Path("config/ssv.example.yaml")
-        if relative.exists():
-            with open(relative) as f:
                 data = yaml.safe_load(f) or {}
             cfg = SsvConfig.model_validate(data)
 

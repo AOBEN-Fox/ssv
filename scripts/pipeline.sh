@@ -11,7 +11,7 @@ cd "$SSV_ROOT"
 
 MODE="run"
 SHOW_DISPLAY=false
-DISPLAY_OVERLAY="$(ssv_yaml_get display.overlay false)"
+DISPLAY_OVERLAY_OVERRIDE=false
 DISPLAY_SINK_OVERRIDE=""
 SKIP_BUILD=false
 
@@ -43,7 +43,7 @@ while [ "$#" -gt 0 ]; do
             ;;
         --overlay)
             SHOW_DISPLAY=true
-            DISPLAY_OVERLAY=true
+            DISPLAY_OVERLAY_OVERRIDE=true
             shift
             ;;
         --sink)
@@ -66,9 +66,102 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-if [ "$SHOW_DISPLAY" = false ] && [ "$(ssv_yaml_get display.enabled false)" = "true" ]; then
+validate_boolean() {
+    local key="$1"
+    local value="$2"
+    case "$value" in
+        true|false) ;;
+        *)
+            ssv_error "$key 必须是 true 或 false: $value"
+            exit 1
+            ;;
+    esac
+}
+
+DISPLAY_ENABLED="$(ssv_yaml_get display.enabled false)"
+DISPLAY_OVERLAY_CONFIG="$(ssv_yaml_get display.overlay false)"
+DISPLAY_FPS="$(ssv_yaml_get display.fps 30)"
+DISPLAY_LATEST_FRAME="$(ssv_yaml_get display.latest_frame true)"
+OVERLAY_FONT_FACE="$(ssv_yaml_get display.overlay_font.face regular)"
+OVERLAY_FONT_SIZE="$(ssv_yaml_get display.overlay_font.size 7)"
+MOTION_PREDICTION_ENABLED="$(ssv_yaml_get display.motion_prediction.enabled true)"
+MOTION_PREDICTION_MAX_HORIZON_MS="$(ssv_yaml_get display.motion_prediction.max_horizon_ms 300)"
+SOURCE_ID="$(ssv_yaml_get sources.0.name pipeline-0)"
+
+FRAME_WIDTH="$(ssv_yaml_get pipeline.frame_width 640)"
+FRAME_HEIGHT="$(ssv_yaml_get pipeline.frame_height 480)"
+ANALYSIS_FPS="$(ssv_yaml_get pipeline.analysis_fps 5)"
+CONF_THRESHOLD="$(ssv_yaml_get inference.confidence_threshold 0.5)"
+INFER_RUNTIME="$(ssv_yaml_get inference.runtime auto)"
+INFER_DEVICE="$(ssv_yaml_get inference.device auto)"
+INFER_DEVICE_ID="$(ssv_yaml_get inference.device_id 0)"
+INFER_PRECISION="$(ssv_yaml_get inference.precision auto)"
+MODEL_FAMILY="$(ssv_yaml_get inference.model_family yolo)"
+OUTPUT_FORMAT="$(ssv_yaml_get inference.output_format auto)"
+RTSP_PROTOCOLS="$(ssv_yaml_get sources.0.protocols tcp)"
+RTSP_LATENCY="$(ssv_yaml_get sources.0.latency_ms 200)"
+REDIS_HOST="${REDIS_HOST:-$(ssv_yaml_get redis.host localhost)}"
+REDIS_PORT="${REDIS_PORT:-$(ssv_yaml_get redis.port 6379)}"
+REDIS_STREAM_KEY="$(ssv_yaml_get redis.stream_key ssv:events)"
+CHECK_TIMEOUT="$(ssv_yaml_get pipeline.check_timeout 30s)"
+GST_DEBUG_LEVEL="${GST_DEBUG:-$(ssv_yaml_get logging.cpp_debug_level "ssv*:4")}"
+RTSP_URL="${SSV_RTSP_URL:-$(ssv_yaml_get sources.0.uri "")}"
+MODEL="$(ssv_yaml_get inference.model_path models/yolov8n.onnx)"
+TARGET_CLASS="$(ssv_yaml_get inference.target_class person)"
+LABEL_MAP="$(ssv_yaml_get inference.label_map config/model-labels/coco80.txt)"
+
+validate_boolean "display.enabled" "$DISPLAY_ENABLED"
+validate_boolean "display.overlay" "$DISPLAY_OVERLAY_CONFIG"
+validate_boolean "display.latest_frame" "$DISPLAY_LATEST_FRAME"
+validate_boolean "display.motion_prediction.enabled" "$MOTION_PREDICTION_ENABLED"
+
+if [[ ! "$DISPLAY_FPS" =~ ^[1-9][0-9]*$ ]]; then
+    ssv_error "display.fps 必须是正整数: $DISPLAY_FPS"
+    exit 1
+fi
+case "$OVERLAY_FONT_FACE" in
+    regular|bold) ;;
+    *)
+        ssv_error "display.overlay_font.face 必须是 regular 或 bold: $OVERLAY_FONT_FACE"
+        exit 1
+        ;;
+esac
+if [[ ! "$OVERLAY_FONT_SIZE" =~ ^[0-9]+$ ]] ||
+   [ "$OVERLAY_FONT_SIZE" -lt 7 ] ||
+   [ "$OVERLAY_FONT_SIZE" -gt 64 ]; then
+    ssv_error "display.overlay_font.size 必须是 7..64 的整数: $OVERLAY_FONT_SIZE"
+    exit 1
+fi
+if [[ ! "$MOTION_PREDICTION_MAX_HORIZON_MS" =~ ^[0-9]+$ ]] ||
+   [ "$MOTION_PREDICTION_MAX_HORIZON_MS" -lt 1 ] ||
+   [ "$MOTION_PREDICTION_MAX_HORIZON_MS" -gt 300 ]; then
+    ssv_error "display.motion_prediction.max_horizon_ms 必须是 1..300 的整数: $MOTION_PREDICTION_MAX_HORIZON_MS"
+    exit 1
+fi
+if [ -z "$SOURCE_ID" ]; then
+    ssv_error "sources.0.name 显式配置时不能为空"
+    exit 1
+fi
+if [[ ! "$ANALYSIS_FPS" =~ ^[0-9]+$ ]]; then
+    ssv_error "pipeline.analysis_fps 必须是非负整数: $ANALYSIS_FPS"
+    exit 1
+fi
+
+DISPLAY_OVERLAY="$DISPLAY_OVERLAY_CONFIG"
+if [ "$DISPLAY_OVERLAY_OVERRIDE" = true ]; then
+    DISPLAY_OVERLAY=true
+fi
+if [ "$SHOW_DISPLAY" = false ] && [ "$DISPLAY_ENABLED" = true ]; then
     SHOW_DISPLAY=true
 fi
+
+if [ -z "$RTSP_URL" ]; then
+    ssv_error "RTSP 视频源未配置"
+    ssv_warn "在 ssv.yaml 设置 sources[0].uri，或临时设置 SSV_RTSP_URL"
+    exit 1
+fi
+
+DISPLAY_MAX_LATENESS_NS="$((1000000000 / DISPLAY_FPS))"
 
 ssv_header "检查 GStreamer Pipeline"
 
@@ -82,6 +175,92 @@ if [ "$MODE" = "smoke" ]; then
         "Debian/Ubuntu"
 fi
 
+if [ "$SHOW_DISPLAY" = true ]; then
+    ssv_require_command "gst-inspect-1.0" \
+        "sudo apt-get install gstreamer1.0-tools" \
+        "Debian/Ubuntu"
+fi
+
+display_sink_supports_property() {
+    local sink="$1"
+    local property="$2"
+    gst-inspect-1.0 "$sink" 2>/dev/null |
+        grep -E "^[[:space:]]*${property}[[:space:]]*:" >/dev/null
+}
+
+display_sink_supports_latest_frame() {
+    local sink="$1"
+    display_sink_supports_property "$sink" sync &&
+        display_sink_supports_property "$sink" max-lateness
+}
+
+validate_display_sink() {
+    local sink="$1"
+    if ! gst-inspect-1.0 "$sink" >/dev/null 2>&1; then
+        ssv_error "display sink 不存在或无法检查: $sink"
+        exit 1
+    fi
+    if [ "$DISPLAY_LATEST_FRAME" = true ] &&
+       ! display_sink_supports_latest_frame "$sink"; then
+        ssv_error "display sink $sink 不支持 latest-frame 所需属性: sync 和 max-lateness"
+        exit 1
+    fi
+}
+
+resolve_display_sink() {
+    local configured_sink="$DISPLAY_SINK_OVERRIDE"
+    if [ -z "$configured_sink" ]; then
+        configured_sink="$(ssv_yaml_get display.sink "")"
+    fi
+    if [ -n "$configured_sink" ]; then
+        validate_display_sink "$configured_sink"
+        printf '%s\n' "$configured_sink"
+        return 0
+    fi
+
+    local sink
+    local candidates=()
+    if [ -n "${DISPLAY:-}" ]; then
+        candidates+=(gtksink ximagesink xvimagesink glimagesink)
+    fi
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        candidates+=(waylandsink)
+    fi
+    if [ "$DISPLAY_LATEST_FRAME" = false ]; then
+        candidates+=(autovideosink)
+    fi
+
+    for sink in "${candidates[@]}"; do
+        if ! gst-inspect-1.0 "$sink" >/dev/null 2>&1; then
+            continue
+        fi
+        if [ "$DISPLAY_LATEST_FRAME" = false ] ||
+           display_sink_supports_latest_frame "$sink"; then
+            printf '%s\n' "$sink"
+            return 0
+        fi
+    done
+
+    if [ "$DISPLAY_LATEST_FRAME" = true ]; then
+        ssv_error "找不到支持 sync 和 max-lateness 的具体视频 sink"
+    else
+        ssv_error "找不到可用的视频 sink"
+    fi
+    exit 1
+}
+
+DISPLAY_SINK=""
+display_sink_args=()
+if [ "$SHOW_DISPLAY" = true ]; then
+    DISPLAY_SINK="$(resolve_display_sink)"
+    display_sink_args=("$DISPLAY_SINK")
+    if [ "$DISPLAY_LATEST_FRAME" = true ]; then
+        display_sink_args+=("sync=true" "max-lateness=$DISPLAY_MAX_LATENESS_NS")
+    elif [ "$DISPLAY_SINK" != "gtksink" ]; then
+        display_sink_args+=("sync=false")
+    fi
+fi
+
 if [ "$SKIP_BUILD" = false ]; then
     bash "$SSV_ROOT/scripts/build.sh"
 fi
@@ -89,16 +268,6 @@ fi
 ssv_deps_load_runtime
 export_ssv_plugin_path
 
-RTSP_URL="${SSV_RTSP_URL:-$(ssv_yaml_get sources.0.uri "")}"
-if [ -z "$RTSP_URL" ]; then
-    ssv_error "RTSP 视频源未配置"
-    ssv_warn "在 ssv.yaml 设置 sources[0].uri，或临时设置 SSV_RTSP_URL"
-    exit 1
-fi
-
-MODEL="$(ssv_yaml_get inference.model_path models/yolov8n.onnx)"
-TARGET_CLASS="$(ssv_yaml_get inference.target_class person)"
-LABEL_MAP="$(ssv_yaml_get inference.label_map config/model-labels/coco80.txt)"
 if [ ! -f "$MODEL" ]; then
     ssv_error "模型文件不存在: $MODEL"
     ssv_warn "运行 ./ssv download-model 下载模型，或在 ssv.yaml 设置 inference.model_path"
@@ -117,93 +286,18 @@ if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^ssv-redis$'; then
     sleep 2
 fi
 
-FRAME_WIDTH="$(ssv_yaml_get pipeline.frame_width 640)"
-FRAME_HEIGHT="$(ssv_yaml_get pipeline.frame_height 480)"
-DISPLAY_FPS="$(ssv_yaml_get display.fps 30)"
-ANALYSIS_FPS="$(ssv_yaml_get pipeline.analysis_fps 5)"
-CONF_THRESHOLD="$(ssv_yaml_get inference.confidence_threshold 0.5)"
-INFER_RUNTIME="$(ssv_yaml_get inference.runtime auto)"
-INFER_DEVICE="$(ssv_yaml_get inference.device auto)"
-INFER_DEVICE_ID="$(ssv_yaml_get inference.device_id 0)"
-INFER_PRECISION="$(ssv_yaml_get inference.precision auto)"
-MODEL_FAMILY="$(ssv_yaml_get inference.model_family yolo)"
-OUTPUT_FORMAT="$(ssv_yaml_get inference.output_format auto)"
-RTSP_PROTOCOLS="$(ssv_yaml_get sources.0.protocols tcp)"
-RTSP_LATENCY="$(ssv_yaml_get sources.0.latency_ms 200)"
-REDIS_HOST="${REDIS_HOST:-$(ssv_yaml_get redis.host localhost)}"
-REDIS_PORT="${REDIS_PORT:-$(ssv_yaml_get redis.port 6379)}"
-REDIS_STREAM_KEY="$(ssv_yaml_get redis.stream_key ssv:events)"
-CHECK_TIMEOUT="$(ssv_yaml_get pipeline.check_timeout 30s)"
-GST_DEBUG_LEVEL="${GST_DEBUG:-$(ssv_yaml_get logging.cpp_debug_level "ssv*:4")}"
-
-if [[ ! "$ANALYSIS_FPS" =~ ^[0-9]+$ ]]; then
-    ssv_error "pipeline.analysis_fps 必须是非负整数: $ANALYSIS_FPS"
-    exit 1
-fi
-
-resolve_display_sink() {
-    if [ -n "$DISPLAY_SINK_OVERRIDE" ]; then
-        echo "$DISPLAY_SINK_OVERRIDE"
-        return 0
-    fi
-
-    local yaml_sink
-    yaml_sink="$(ssv_yaml_get display.sink "")"
-    if [ -n "$yaml_sink" ]; then
-        echo "$yaml_sink"
-        return 0
-    fi
-
-    if [ -n "${DISPLAY:-}" ] && gst-inspect-1.0 gtksink >/dev/null 2>&1; then
-        echo "gtksink"
-        return 0
-    fi
-
-    if [ -n "${WAYLAND_DISPLAY:-}" ] && gst-inspect-1.0 waylandsink >/dev/null 2>&1; then
-        echo "waylandsink"
-        return 0
-    fi
-
-    if [ -n "${DISPLAY:-}" ] && gst-inspect-1.0 ximagesink >/dev/null 2>&1; then
-        echo "ximagesink"
-        return 0
-    fi
-
-    if [ -n "${DISPLAY:-}" ] && gst-inspect-1.0 xvimagesink >/dev/null 2>&1; then
-        echo "xvimagesink"
-        return 0
-    fi
-
-    if [ -n "${DISPLAY:-}" ] && gst-inspect-1.0 glimagesink >/dev/null 2>&1; then
-        echo "glimagesink"
-        return 0
-    fi
-
-    if gst-inspect-1.0 autovideosink >/dev/null 2>&1; then
-        echo "autovideosink"
-        return 0
-    fi
-
-    ssv_error "no usable video sink found"
-    exit 1
-}
-
-DISPLAY_SINK="$(resolve_display_sink)"
-display_sink_args=("$DISPLAY_SINK")
-if [ "$DISPLAY_SINK" != "gtksink" ]; then
-    display_sink_args+=("sync=false")
-fi
-
 rtsp_decode_pipeline=(
     rtspsrc "location=$RTSP_URL" "protocols=$RTSP_PROTOCOLS" "latency=$RTSP_LATENCY"
     ! application/x-rtp,media=video
     ! decodebin
+    ! clocksync "sync=true"
     ! queue "leaky=downstream" "max-size-buffers=2"
     ! videoconvert
 )
 
 infer_props=(
     ssvinfer
+    "source-id=$SOURCE_ID"
     "runtime=$INFER_RUNTIME"
     "model-path=$MODEL"
     "conf-threshold=$CONF_THRESHOLD"
@@ -218,6 +312,28 @@ infer_props=(
 if [ -n "$TARGET_CLASS" ]; then
     infer_props+=("target-class=$TARGET_CLASS")
 fi
+
+track_props=(
+    ssvtrack
+    "source-id=$SOURCE_ID"
+)
+
+pub_props=(
+    ssvpub
+    "source-id=$SOURCE_ID"
+    "redis-host=$REDIS_HOST"
+    "redis-port=$REDIS_PORT"
+    "stream-key=$REDIS_STREAM_KEY"
+)
+
+overlay_props=(
+    ssvoverlay
+    "source-id=$SOURCE_ID"
+    "motion-prediction=$MOTION_PREDICTION_ENABLED"
+    "max-horizon-ms=$MOTION_PREDICTION_MAX_HORIZON_MS"
+    "font-face=$OVERLAY_FONT_FACE"
+    "font-size=$OVERLAY_FONT_SIZE"
+)
 
 analysis_rate_pipeline=(
     ! videoscale
@@ -239,19 +355,37 @@ analysis_pipeline=(
     "${analysis_rate_pipeline[@]}"
     ! ssvtemplate
     ! "${infer_props[@]}"
-    ! ssvtrack
-    ! ssvpub "redis-host=$REDIS_HOST" "redis-port=$REDIS_PORT" "stream-key=$REDIS_STREAM_KEY"
+    ! "${track_props[@]}"
+    ! "${pub_props[@]}"
 )
 
-display_source_pipeline=(
-    ! videoscale
-    ! videorate
-    ! "video/x-raw,framerate=$DISPLAY_FPS/1"
+analysis_queue_pipeline=(
+    ! queue "leaky=downstream" "max-size-buffers=2"
 )
+
+if [ "$DISPLAY_LATEST_FRAME" = "true" ]; then
+    display_queue_pipeline=(
+        ! queue "max-size-buffers=1" "leaky=downstream"
+    )
+    display_source_pipeline=(
+        ! videoscale
+        ! videorate "drop-only=true" "max-rate=$DISPLAY_FPS"
+    )
+else
+    display_queue_pipeline=(
+        ! queue "leaky=downstream" "max-size-buffers=2"
+    )
+    display_source_pipeline=(
+        ! videoscale
+        ! videorate
+        ! "video/x-raw,framerate=$DISPLAY_FPS/1"
+    )
+fi
 
 ssv_info "输入: $RTSP_URL"
-ssv_info "RTSP transport: $RTSP_PROTOCOLS, latency: ${RTSP_LATENCY}ms"
+ssv_info "RTSP 网络缓冲: transport=$RTSP_PROTOCOLS, latency=${RTSP_LATENCY}ms"
 ssv_info "显示帧率: ${DISPLAY_FPS}fps, 分析帧率: ${ANALYSIS_FPS_LABEL}"
+ssv_info "感知 source-id: $SOURCE_ID"
 ssv_info "模型: $MODEL"
 ssv_info "推理运行时: $INFER_RUNTIME"
 ssv_info "推理设备: $INFER_DEVICE (device-id=$INFER_DEVICE_ID, precision=$INFER_PRECISION)"
@@ -262,17 +396,19 @@ ssv_info "Redis Stream: $REDIS_STREAM_KEY"
 
 if [ "$SHOW_DISPLAY" = true ]; then
     ssv_info "模式: 实时链路 + 视频观察窗口 (sink: $DISPLAY_SINK)"
+    ssv_info "最新帧策略: latest_frame=$DISPLAY_LATEST_FRAME, max-lateness=${DISPLAY_MAX_LATENESS_NS}ns"
+    ssv_info "展示运动预测: enabled=$MOTION_PREDICTION_ENABLED, max-horizon=${MOTION_PREDICTION_MAX_HORIZON_MS}ms"
+    ssv_info "Overlay 字体: face=$OVERLAY_FONT_FACE, size=${OVERLAY_FONT_SIZE}px"
     ssv_info "关闭视频窗口即退出"
     if [ "$DISPLAY_OVERLAY" = true ]; then
-        ssv_warn "检测框 overlay 当前为实验路径；如窗口异常，去掉 --overlay"
         GST_DEBUG="$GST_DEBUG_LEVEL" \
         gst-launch-1.0 \
             "${rtsp_decode_pipeline[@]}" \
             ! tee name=t \
-              t. ! queue "leaky=downstream" "max-size-buffers=2" \
+              t. "${display_queue_pipeline[@]}" \
                  "${display_source_pipeline[@]}" \
-                 ! videoconvert ! "video/x-raw,format=BGRx" ! ssvoverlay ! videoconvert ! "video/x-raw,format=BGRx" ! "${display_sink_args[@]}" \
-              t. ! queue "leaky=downstream" "max-size-buffers=2" \
+                 ! videoconvert ! "video/x-raw,format=BGRx" ! "${overlay_props[@]}" ! videoconvert ! "video/x-raw,format=BGRx" ! "${display_sink_args[@]}" \
+              t. "${analysis_queue_pipeline[@]}" \
                  "${analysis_pipeline[@]}" \
                  ! fakesink sync=false async=false
     else
@@ -280,10 +416,10 @@ if [ "$SHOW_DISPLAY" = true ]; then
         gst-launch-1.0 \
             "${rtsp_decode_pipeline[@]}" \
             ! tee name=t \
-              t. ! queue "leaky=downstream" "max-size-buffers=2" \
+              t. "${display_queue_pipeline[@]}" \
                  "${display_source_pipeline[@]}" \
                  ! videoconvert ! "video/x-raw,format=BGRx" ! "${display_sink_args[@]}" \
-              t. ! queue "leaky=downstream" "max-size-buffers=2" \
+              t. "${analysis_queue_pipeline[@]}" \
                  "${analysis_pipeline[@]}" \
                  ! fakesink sync=false async=false
     fi

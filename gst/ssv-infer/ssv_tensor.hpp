@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ssv_meta.hpp"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -43,6 +45,7 @@ struct ModelMetadata {
 struct SsvVideoFrame {
     uint64_t frame_id = 0;
     std::string source_id;
+    SsvFrameTiming timing;
     int width = 0;
     int height = 0;
     int stride = 0;

@@ -2,18 +2,14 @@
 
 #include <gst/gst.h>
 
-#include <mutex>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-/// Track state enum — 2-bit, embedded in SsvDetection::track_state.
-///
-///  - NEW (0):   Track just created in this frame (first appearance).
-///  - MATCHED (1): Track successfully matched to an existing trajectory.
-///  - LOST (2):   Track alive but unmatched this frame (time_since_seen > 0).
-///                No corresponding detection exists in current frame output.
-///  - DEAD (3):   Track exceeded track-buffer and was removed.
-///                No corresponding detection exists.
 enum SsvTrackState : int {
     SSV_TRACK_NEW = 0,
     SSV_TRACK_MATCHED = 1,
@@ -21,75 +17,180 @@ enum SsvTrackState : int {
     SSV_TRACK_DEAD = 3,
 };
 
-/// Single detection result in original-frame normalized coordinates.
-struct SsvDetection {
-    char class_name[32];   ///< Short label name, e.g. "person"
-    float confidence;      ///< finite [0, 1]
-    float x1, y1, x2, y2; ///< original-frame normalized bbox, [0, 1], left-top/right-bottom
-    int class_id = -1;     ///< model class index, -1 = unset
-    int track_id = -1;     ///< assigned by ssvtrack, -1 = not tracked
-    int track_state = SSV_TRACK_NEW;  ///< SsvTrackState for this detection's track
-    bool occluded = false; ///< true when confidence < track-thresh on a matched track
+struct SsvFrameTiming {
+    GstClockTime pts = GST_CLOCK_TIME_NONE;
+    GstClockTime duration = GST_CLOCK_TIME_NONE;
+    std::uint64_t generation = 0;
 };
 
-/// Per-frame detection result.
-struct SsvFrameDetections {
-    guint64 frame_id = 0;
-    char source_id[64] = {};
+inline bool operator==(const SsvFrameTiming &left, const SsvFrameTiming &right)
+{
+    return left.pts == right.pts && left.duration == right.duration &&
+        left.generation == right.generation;
+}
+
+struct SsvDetection {
+    char class_name[32] = {};
+    float confidence = 0.0F;
+    float x1 = 0.0F;
+    float y1 = 0.0F;
+    float x2 = 0.0F;
+    float y2 = 0.0F;
+    int class_id = -1;
+};
+
+struct SsvDetectionFrame {
+    std::uint64_t frame_id = 0;
+    std::string source_id;
+    SsvFrameTiming timing;
     std::vector<SsvDetection> detections;
 };
 
-/// Normalizes one detection in-place.
-///
-/// Returns false when the detection violates the public metadata contract and
-/// must be dropped before reaching tracking, overlay, or publishing.
-bool ssv_normalize_detection(SsvDetection &det);
+struct SsvTrackedObject {
+    SsvDetection detection;
+    int track_id = -1;
+    SsvTrackState track_state = SSV_TRACK_NEW;
+    bool occluded = false;
+};
+
+struct SsvTrackedFrame {
+    std::uint64_t frame_id = 0;
+    std::string source_id;
+    SsvFrameTiming timing;
+    std::vector<SsvTrackedObject> objects;
+};
+
+struct SsvOverlayBox {
+    SsvDetection detection;
+    int track_id = -1;
+    SsvTrackState track_state = SSV_TRACK_NEW;
+    bool occluded = false;
+    bool predicted = false;
+};
 
 struct SsvOverlayFrame {
-    guint64 frame_id = 0;
-    char source_id[64] = {};
-    std::vector<SsvDetection> detections;
+    std::string source_id;
+    SsvFrameTiming observation_timing;
+    SsvFrameTiming display_timing;
+    std::vector<SsvOverlayBox> boxes;
 };
 
-/// Thread-safe singleton for passing detections between plugins.
-///
-/// Three-state model for inference, tracking, publishing, and overlay:
-///   EMPTY ──set()──→ HAS_DETECTIONS ──take_for_tracking()──→ EMPTY
-///     ↑                                        │
-///     │                           set_tracked()│
-///     │                                        ↓
-///     └──────── take() ←─── HAS_TRACKS ←──────┘
-///
-/// ssvinfer calls set(), ssvtrack calls take_for_tracking()/set_tracked(),
-/// ssvpub calls take().
-class SsvDetectionStore {
+enum class SsvMetaResult {
+    Published,
+    Consumed,
+    Empty,
+    NoPts,
+    Occupied,
+    WrongSource,
+    WrongGeneration,
+    DuplicatePts,
+    StalePts,
+};
+
+struct SsvMetaStats {
+    std::uint64_t published = 0;
+    std::uint64_t consumed = 0;
+    std::uint64_t empty = 0;
+    std::uint64_t no_pts = 0;
+    std::uint64_t occupied = 0;
+    std::uint64_t wrong_source = 0;
+    std::uint64_t wrong_generation = 0;
+    std::uint64_t duplicate_pts = 0;
+    std::uint64_t stale_pts = 0;
+    std::uint64_t generation_resets = 0;
+    std::size_t max_history_depth = 0;
+};
+
+struct SsvDetectionConsumeResult {
+    SsvMetaResult result = SsvMetaResult::Empty;
+    std::optional<SsvDetectionFrame> frame;
+};
+
+struct SsvTrackedConsumeResult {
+    SsvMetaResult result = SsvMetaResult::Empty;
+    std::shared_ptr<const SsvTrackedFrame> frame;
+};
+
+struct SsvTimelineSegment {
+    GstClockTime start = 0;
+    GstClockTime time = 0;
+    GstClockTime base = 0;
+    double rate = 1.0;
+
+    bool operator==(const SsvTimelineSegment &) const = default;
+};
+
+struct SsvTimelineUpdate {
+    std::uint64_t generation = 0;
+    bool reset = false;
+};
+
+class SsvTimelineCursor;
+
+class SsvSourceMeta final {
 public:
-    static SsvDetectionStore &instance();
+    explicit SsvSourceMeta(std::string_view source_id);
+    ~SsvSourceMeta();
 
-    /// Called by ssvinfer.  Overwrites EMPTY or HAS_DETECTIONS (stale), but
-    /// does not publish the untracked intermediate result to overlay.
-    /// Skips if HAS_TRACKS (unpublished data waiting for ssvpub).
-    void set(SsvFrameDetections det);
+    SsvSourceMeta(const SsvSourceMeta &) = delete;
+    SsvSourceMeta &operator=(const SsvSourceMeta &) = delete;
 
-    /// Called by ssvtrack.  Returns data only when HAS_DETECTIONS.
-    SsvFrameDetections take_for_tracking();
+    std::uint64_t generation() const;
 
-    /// Called by ssvtrack.  Writes tracked results and publishes the overlay
-    /// snapshot, including empty results that clear stale boxes.
-    void set_tracked(SsvFrameDetections det);
+    SsvMetaResult publish_detection(SsvDetectionFrame &&frame);
+    SsvDetectionConsumeResult consume_detection();
 
-    /// Called by ssvpub.  Returns data only when HAS_TRACKS.
-    SsvFrameDetections take();
+    SsvMetaResult publish_tracked(
+        SsvDetectionFrame &&observation,
+        std::vector<SsvTrackedObject> objects);
+    SsvTrackedConsumeResult consume_tracked();
 
-    /// Called by ssvoverlay.  Returns the latest complete tracked result
-    /// without consuming it.
-    SsvOverlayFrame peek_latest();
+    std::shared_ptr<const SsvTrackedFrame> latest_tracked_at_or_before(
+        GstClockTime display_pts) const;
+    std::size_t history_depth() const;
+    SsvMetaStats stats() const;
 
 private:
-    enum class State { EMPTY, HAS_DETECTIONS, HAS_TRACKS };
+    friend class SsvTimelineCursor;
 
-    std::mutex mtx_;
-    SsvFrameDetections current_;
-    SsvOverlayFrame overlay_current_;
-    State state_ = State::EMPTY;
+    struct Impl;
+
+    std::uint64_t observe_segment(
+        const SsvTimelineSegment &segment,
+        std::uint64_t expected_generation,
+        bool coalesce_reset);
+    std::uint64_t request_reset(std::uint64_t expected_generation);
+
+    std::unique_ptr<Impl> impl_;
 };
+
+class SsvTimelineCursor final {
+public:
+    explicit SsvTimelineCursor(std::shared_ptr<SsvSourceMeta> source);
+
+    SsvTimelineUpdate on_segment(const SsvTimelineSegment &segment);
+    SsvTimelineUpdate on_flush_stop(bool reset_time);
+    SsvTimelineUpdate on_buffer(GstClockTime pts, bool discontinuity);
+    SsvTimelineUpdate on_lifecycle_reset();
+
+    std::uint64_t generation() const { return generation_; }
+
+private:
+    enum class ResetKind {
+        None,
+        Flush,
+        Discontinuity,
+        PtsRollback,
+        Lifecycle,
+    };
+
+    SsvTimelineUpdate synchronize();
+    SsvTimelineUpdate reset_once(ResetKind kind);
+
+    std::shared_ptr<SsvSourceMeta> source_;
+    std::uint64_t generation_ = 0;
+    GstClockTime last_pts_ = GST_CLOCK_TIME_NONE;
+    ResetKind last_reset_kind_ = ResetKind::None;
+};
+
+std::shared_ptr<SsvSourceMeta> ssv_meta(std::string_view source_id);

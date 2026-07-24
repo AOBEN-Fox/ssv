@@ -26,6 +26,7 @@ using ssv::infer::SsvVideoFrame;
 struct _SsvInfer {
     GstBaseTransform parent;
 
+    gchar *source_id;
     gchar *runtime;
     gchar *model_path;
     gchar *device;
@@ -38,6 +39,8 @@ struct _SsvInfer {
     gchar *label_map_path;
 
     InferenceEngine *engine;
+    SsvTimelineCursor *timeline;
+    SsvSourceMeta *meta;
 
     guint64 frame_id;
     gboolean mock_detect;
@@ -57,6 +60,7 @@ struct _SsvInfer {
 
 enum {
     PROP_0,
+    PROP_SOURCE_ID,
     PROP_RUNTIME,
     PROP_MODEL_PATH,
     PROP_DEVICE,
@@ -104,12 +108,13 @@ ssv_infer_make_config(SsvInfer *self)
     return config;
 }
 
-static SsvFrameDetections
+static SsvDetectionFrame
 ssv_infer_empty_detections(const SsvVideoFrame &input)
 {
-    SsvFrameDetections det;
+    SsvDetectionFrame det;
     det.frame_id = input.frame_id;
-    std::snprintf(det.source_id, sizeof(det.source_id), "%s", input.source_id.c_str());
+    det.source_id = input.source_id;
+    det.timing = input.timing;
     return det;
 }
 
@@ -132,27 +137,66 @@ ssv_infer_note_inference_completed(SsvInfer *self)
     *self->inference_fps_started_at = now;
 }
 
-static void
+static const char *
+ssv_meta_result_name(SsvMetaResult result)
+{
+    switch (result) {
+    case SsvMetaResult::Published: return "published";
+    case SsvMetaResult::Consumed: return "consumed";
+    case SsvMetaResult::Empty: return "empty";
+    case SsvMetaResult::NoPts: return "no-pts";
+    case SsvMetaResult::Occupied: return "occupied";
+    case SsvMetaResult::WrongSource: return "wrong-source";
+    case SsvMetaResult::WrongGeneration: return "wrong-generation";
+    case SsvMetaResult::DuplicatePts: return "duplicate-pts";
+    case SsvMetaResult::StalePts: return "stale-pts";
+    }
+    return "unknown";
+}
+
+static bool
+ssv_infer_publish_is_fatal(SsvMetaResult result, bool async_infer)
+{
+    return result == SsvMetaResult::WrongSource ||
+        (result == SsvMetaResult::Occupied && !async_infer);
+}
+
+static GstFlowReturn
+ssv_infer_publish_flow(
+    SsvInfer *self,
+    SsvMetaResult result,
+    bool async_infer)
+{
+    if (!ssv_infer_publish_is_fatal(result, async_infer))
+        return GST_FLOW_OK;
+    GST_ELEMENT_ERROR(self, STREAM, FAILED,
+        ("inference metadata publish rejected the frame"),
+        ("source-id=%s result=%s", self->source_id,
+         ssv_meta_result_name(result)));
+    return GST_FLOW_ERROR;
+}
+
+static SsvMetaResult
 ssv_infer_run_on_frame(SsvInfer *self, const SsvVideoFrame &input)
 {
-    SsvFrameDetections det = ssv_infer_empty_detections(input);
-    if (!self->engine || !self->engine->loaded()) {
-        SsvDetectionStore::instance().set(std::move(det));
-        return;
-    }
+    SsvDetectionFrame det = ssv_infer_empty_detections(input);
+    if (!self->meta)
+        return SsvMetaResult::WrongGeneration;
 
-    try {
-        det = self->engine->run(input);
-    } catch (const std::exception &e) {
-        GST_WARNING_OBJECT(self, "inference failed: %s", e.what());
+    if (self->engine && self->engine->loaded()) {
+        try {
+            det = self->engine->run(input);
+        } catch (const std::exception &e) {
+            GST_WARNING_OBJECT(self, "inference failed: %s", e.what());
+        }
+        ssv_infer_note_inference_completed(self);
     }
-    ssv_infer_note_inference_completed(self);
 
     if (!det.detections.empty()) {
         GST_DEBUG_OBJECT(self, "frame %" G_GUINT64_FORMAT ": %zu detections",
             det.frame_id, det.detections.size());
     }
-    SsvDetectionStore::instance().set(std::move(det));
+    return self->meta->publish_detection(std::move(det));
 }
 
 static void
@@ -170,7 +214,14 @@ ssv_infer_worker_loop(SsvInfer *self)
             frame = std::move(*self->latest_frame);
             self->latest_frame_ready = false;
         }
-        ssv_infer_run_on_frame(self, frame);
+        const auto result = ssv_infer_run_on_frame(self, frame);
+        if (ssv_infer_publish_is_fatal(result, true)) {
+            GST_ELEMENT_ERROR(self, STREAM, FAILED,
+                ("inference metadata publish rejected the frame"),
+                ("source-id=%s result=%s", self->source_id,
+                 ssv_meta_result_name(result)));
+            return;
+        }
     }
 }
 
@@ -186,6 +237,7 @@ ssv_infer_store_latest_frame(SsvInfer *self, SsvVideoFrame *frame)
 
 static gboolean
 ssv_infer_copy_frame(GstBaseTransform *trans, GstBuffer *buf, guint64 frame_id,
+                     const gchar *source_id, const SsvFrameTiming &timing,
                      SsvVideoFrame *out)
 {
     GstVideoFrame frame;
@@ -203,7 +255,8 @@ ssv_infer_copy_frame(GstBaseTransform *trans, GstBuffer *buf, guint64 frame_id,
         return FALSE;
 
     out->frame_id = frame_id;
-    out->source_id = "pipeline-0";
+    out->source_id = source_id;
+    out->timing = timing;
     out->width = GST_VIDEO_FRAME_WIDTH(&frame);
     out->height = GST_VIDEO_FRAME_HEIGHT(&frame);
     out->stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
@@ -217,6 +270,16 @@ static gboolean
 ssv_infer_start(GstBaseTransform *trans)
 {
     SsvInfer *self = SSV_INFER(trans);
+
+    if (!self->source_id || self->source_id[0] == '\0') {
+        GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
+            ("source-id must not be empty"), (nullptr));
+        return FALSE;
+    }
+    auto meta = ssv_meta(self->source_id);
+    delete self->timeline;
+    self->timeline = new SsvTimelineCursor(meta);
+    self->meta = meta.get();
 
     if (self->mock_detect) {
         GST_INFO_OBJECT(self, "mock-detect enabled, skipping model load");
@@ -278,6 +341,11 @@ ssv_infer_stop(GstBaseTransform *trans)
 {
     SsvInfer *self = SSV_INFER(trans);
     ssv_infer_stop_worker(self);
+    if (self->timeline)
+        self->timeline->on_lifecycle_reset();
+    delete self->timeline;
+    self->timeline = nullptr;
+    self->meta = nullptr;
     delete self->engine;
     self->engine = nullptr;
     delete self->worker_cv;
@@ -297,9 +365,19 @@ ssv_infer_transform_ip(GstBaseTransform *trans, GstBuffer *buf)
 {
     SsvInfer *self = SSV_INFER(trans);
 
-    SsvFrameDetections det;
-    det.frame_id = self->frame_id++;
-    std::snprintf(det.source_id, sizeof(det.source_id), "pipeline-0");
+    const auto frame_id = self->frame_id++;
+    const auto update = self->timeline
+        ? self->timeline->on_buffer(
+              GST_BUFFER_PTS(buf),
+              GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DISCONT))
+        : SsvTimelineUpdate{};
+    const SsvFrameTiming timing{
+        GST_BUFFER_PTS(buf), GST_BUFFER_DURATION(buf), update.generation};
+
+    SsvDetectionFrame det;
+    det.frame_id = frame_id;
+    det.source_id = self->source_id;
+    det.timing = timing;
 
     if (self->mock_detect) {
         SsvDetection d{};
@@ -309,16 +387,21 @@ ssv_infer_transform_ip(GstBaseTransform *trans, GstBuffer *buf)
         d.x2 = 0.5f; d.y2 = 0.8f;
         d.class_id = 0;
         det.detections.push_back(d);
-        SsvDetectionStore::instance().set(std::move(det));
-        GST_DEBUG_OBJECT(self, "mock frame %" G_GUINT64_FORMAT, self->frame_id - 1);
-        return GST_FLOW_OK;
+        const auto result = self->meta
+            ? self->meta->publish_detection(std::move(det))
+            : SsvMetaResult::WrongGeneration;
+        GST_DEBUG_OBJECT(self, "mock frame %" G_GUINT64_FORMAT, frame_id);
+        return ssv_infer_publish_flow(self, result, false);
     }
 
     auto *frame = new SsvVideoFrame();
-    if (!ssv_infer_copy_frame(trans, buf, det.frame_id, frame)) {
+    if (!ssv_infer_copy_frame(
+            trans, buf, frame_id, self->source_id, timing, frame)) {
         delete frame;
-        SsvDetectionStore::instance().set(std::move(det));
-        return GST_FLOW_OK;
+        const auto result = self->meta
+            ? self->meta->publish_detection(std::move(det))
+            : SsvMetaResult::WrongGeneration;
+        return ssv_infer_publish_flow(self, result, false);
     }
 
     if (self->async_infer && self->worker && self->worker_mutex && self->worker_cv) {
@@ -326,9 +409,30 @@ ssv_infer_transform_ip(GstBaseTransform *trans, GstBuffer *buf)
         return GST_FLOW_OK;
     }
 
-    ssv_infer_run_on_frame(self, *frame);
+    const auto result = ssv_infer_run_on_frame(self, *frame);
     delete frame;
-    return GST_FLOW_OK;
+    return ssv_infer_publish_flow(self, result, false);
+}
+
+static gboolean
+ssv_infer_sink_event(GstBaseTransform *trans, GstEvent *event)
+{
+    auto *self = SSV_INFER(trans);
+    if (self->timeline) {
+        if (GST_EVENT_TYPE(event) == GST_EVENT_SEGMENT) {
+            const GstSegment *segment = nullptr;
+            gst_event_parse_segment(event, &segment);
+            if (segment && segment->format == GST_FORMAT_TIME) {
+                self->timeline->on_segment({
+                    segment->start, segment->time, segment->base, segment->rate});
+            }
+        } else if (GST_EVENT_TYPE(event) == GST_EVENT_FLUSH_STOP) {
+            gboolean reset_time = FALSE;
+            gst_event_parse_flush_stop(event, &reset_time);
+            self->timeline->on_flush_stop(reset_time);
+        }
+    }
+    return GST_BASE_TRANSFORM_CLASS(ssv_infer_parent_class)->sink_event(trans, event);
 }
 
 static void
@@ -337,6 +441,10 @@ ssv_infer_set_property(GObject *object, guint prop_id,
 {
     auto *self = SSV_INFER(object);
     switch (prop_id) {
+    case PROP_SOURCE_ID:
+        g_free(self->source_id);
+        self->source_id = g_value_dup_string(value);
+        break;
     case PROP_RUNTIME:
         g_free(self->runtime);
         self->runtime = g_value_dup_string(value);
@@ -392,6 +500,9 @@ ssv_infer_get_property(GObject *object, guint prop_id,
 {
     auto *self = SSV_INFER(object);
     switch (prop_id) {
+    case PROP_SOURCE_ID:
+        g_value_set_string(value, self->source_id);
+        break;
     case PROP_RUNTIME:
         g_value_set_string(value, self->runtime);
         break;
@@ -437,6 +548,7 @@ static void
 ssv_infer_finalize(GObject *object)
 {
     auto *self = SSV_INFER(object);
+    g_free(self->source_id);
     g_free(self->runtime);
     g_free(self->model_path);
     g_free(self->device);
@@ -446,6 +558,7 @@ ssv_infer_finalize(GObject *object)
     g_free(self->target_class);
     g_free(self->label_map_path);
     delete self->engine;
+    delete self->timeline;
     delete self->latest_frame;
     delete self->worker_cv;
     delete self->worker_mutex;
@@ -464,6 +577,13 @@ ssv_infer_class_init(SsvInferClass *klass)
     gobject_class->set_property = ssv_infer_set_property;
     gobject_class->get_property = ssv_infer_get_property;
     gobject_class->finalize = ssv_infer_finalize;
+
+    g_object_class_install_property(gobject_class, PROP_SOURCE_ID,
+        g_param_spec_string("source-id", "Source ID",
+            "Perception metadata source identifier",
+            "pipeline-0",
+            (GParamFlags)(G_PARAM_READWRITE | GST_PARAM_MUTABLE_READY |
+                          G_PARAM_STATIC_STRINGS)));
 
     g_object_class_install_property(gobject_class, PROP_RUNTIME,
         g_param_spec_string("runtime", "Inference Runtime",
@@ -539,12 +659,14 @@ ssv_infer_class_init(SsvInferClass *klass)
     base_class->start = ssv_infer_start;
     base_class->stop = ssv_infer_stop;
     base_class->transform_ip = ssv_infer_transform_ip;
+    base_class->sink_event = ssv_infer_sink_event;
     base_class->passthrough_on_same_caps = TRUE;
 }
 
 static void
 ssv_infer_init(SsvInfer *self)
 {
+    self->source_id = g_strdup("pipeline-0");
     self->runtime = g_strdup("auto");
     self->model_path = nullptr;
     self->device = g_strdup("auto");
@@ -556,6 +678,8 @@ ssv_infer_init(SsvInfer *self)
     self->target_class = g_strdup("");
     self->label_map_path = nullptr;
     self->engine = nullptr;
+    self->timeline = nullptr;
+    self->meta = nullptr;
     self->frame_id = 0;
     self->mock_detect = FALSE;
     self->async_infer = TRUE;

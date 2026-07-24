@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 
-from ssv_agent.config import load_config
+from ssv_agent import cli
+from ssv_agent.config import SsvConfig, load_config
 
 
 def test_load_config_uses_yaml_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,3 +74,43 @@ def test_load_config_uses_config_directory_yaml(
 def test_load_config_missing_explicit_path_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         load_config(tmp_path / "missing.yaml")
+
+
+def test_load_config_does_not_use_example_as_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SSV_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("REDIS_HOST", raising=False)
+    monkeypatch.delenv("REDIS_PORT", raising=False)
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "ssv.example.yaml").write_text(
+        "redis:\n  host: example-only-host\n",
+        encoding="utf-8",
+    )
+
+    cfg = load_config()
+
+    assert cfg.redis.host == "localhost"
+
+
+def test_cli_does_not_pass_example_as_default_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_paths: list[str | Path | None] = []
+    monkeypatch.delenv("SSV_CONFIG_PATH", raising=False)
+    monkeypatch.setattr(sys, "argv", ["ssv-agent"])
+    monkeypatch.setattr(cli, "find_dotenv", lambda: "")
+    monkeypatch.setattr(cli, "load_dotenv", lambda _: False)
+    monkeypatch.setattr(
+        cli,
+        "load_config",
+        lambda path=None: observed_paths.append(path) or SsvConfig(),
+    )
+    monkeypatch.setattr(cli, "setup_logging", lambda _: None)
+    monkeypatch.setattr(cli, "run", lambda _: None)
+
+    cli.main()
+
+    assert observed_paths == [None]

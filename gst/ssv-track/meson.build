@@ -4,7 +4,7 @@ if opencv_enabled
   ssv_track_deps += opencv_dep
 endif
 
-shared_library('gstssvtrack',
+ssv_track_lib = shared_library('gstssvtrack',
   'gstssvtrack.cpp',
   'botsort/botsort_kalman.cpp',
   'botsort/botsort_matching.cpp',

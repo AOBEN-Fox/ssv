@@ -25,7 +25,7 @@ elif [ -f "$SSV_ROOT/ssv.yaml" ]; then
 elif [ -f "$SSV_ROOT/config/ssv.yaml" ]; then
     SSV_CONFIG="$SSV_ROOT/config/ssv.yaml"
 else
-    SSV_CONFIG="$SSV_ROOT/config/ssv.example.yaml"
+    SSV_CONFIG=""
 fi
 SSV_BUILD_DIR="${SSV_BUILD_DIR:-$SSV_ROOT/build}"
 case "$SSV_BUILD_DIR" in
