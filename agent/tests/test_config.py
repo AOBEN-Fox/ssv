@@ -114,3 +114,39 @@ def test_cli_does_not_pass_example_as_default_config(
     cli.main()
 
     assert observed_paths == [None]
+
+
+def test_review_defaults_are_disabled() -> None:
+    cfg = SsvConfig()
+
+    assert cfg.redis.review_candidate_stream == "ssv:review-candidates"
+    assert cfg.redis.review_result_stream == "ssv:review-results"
+    assert cfg.artifacts.events_root == Path("artifacts/events")
+    assert cfg.review.enabled is False
+    assert cfg.review.automatic_decision_min_confidence == 0.80
+    assert cfg.agent.review_model == ""
+    assert cfg.agent.models == []
+
+
+def test_enabled_review_requires_one_vision_model() -> None:
+    with pytest.raises(ValueError, match="agent.review_model"):
+        SsvConfig.model_validate({"review": {"enabled": True}})
+
+    cfg = SsvConfig.model_validate(
+        {
+            "review": {"enabled": True},
+            "agent": {
+                "review_model": "demo-vision",
+                "models": [
+                    {
+                        "name": "demo-vision",
+                        "use": "ssv_agent.review.mock_provider:MockVisionChatModel",
+                        "model": "demo-vision",
+                        "supports_vision": True,
+                    }
+                ],
+            },
+        }
+    )
+
+    assert cfg.agent.models[0].supports_vision is True

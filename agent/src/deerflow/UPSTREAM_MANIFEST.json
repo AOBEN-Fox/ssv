@@ -1,0 +1,369 @@
+{
+  "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+  "files": [
+    {
+      "source_path": "backend/packages/harness/deerflow/__init__.py",
+      "destination_path": "src/deerflow/__init__.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/constants.py",
+      "destination_path": "src/deerflow/constants.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "4d355244c57a50f3e1bae806e3c788fc092f50a574cb099619d834ea25e83a79",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/trace_context.py",
+      "destination_path": "src/deerflow/trace_context.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "8ac20f09ae8961151a8b64c1b34189a66190923f49a4626677ff5b977abb29a6",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/__init__.py",
+      "destination_path": "src/deerflow/config/__init__.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "a3f4786f83af0c14647fdae5b0c710a48ed8bfe22813d4479fb91c900b1e4876",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/acp_config.py",
+      "destination_path": "src/deerflow/config/acp_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "545c5a8979ee20502ad8abb6e2a583b2b7ec8adbe4053a5faf1b5741d8c71edd",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/agents_api_config.py",
+      "destination_path": "src/deerflow/config/agents_api_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "1e7d88c0ed557899924f0ee1d25429bfa2b59e8513bce34678a97e81fe1f85d6",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/app_config.py",
+      "destination_path": "src/deerflow/config/app_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "90cc9f5c8c781f0ee802de79ad226569131564e81c540f4b8e9cf1063cd2df19",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/auth_config.py",
+      "destination_path": "src/deerflow/config/auth_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "e73edb1342b753d9f21009100fe22954c240aa32b617e2729751a9509e224318",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/authorization_config.py",
+      "destination_path": "src/deerflow/config/authorization_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "1da187988ff901935065dafbf1e5c15d8ff17c8486466539713778b6afd3a944",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/channel_connections_config.py",
+      "destination_path": "src/deerflow/config/channel_connections_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "7553132f939d2f8c9c1b11359eb920989775b22c22bf0abb7044b01fb511baca",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/checkpointer_config.py",
+      "destination_path": "src/deerflow/config/checkpointer_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "2b08854de32314bdc284cff2a56d1d7a95b33a2b4a4c10a9bcd9fb78dd091b5f",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/database_config.py",
+      "destination_path": "src/deerflow/config/database_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "8014f7fff16cb39368a78675e00c5b507dcecc304ccfda22daaaa85011d3240e",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/extensions_config.py",
+      "destination_path": "src/deerflow/config/extensions_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "2f129b9c41d5c17921561747ef765197f8a81ccf06233401cb802c3ae60a01cc",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/guardrails_config.py",
+      "destination_path": "src/deerflow/config/guardrails_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "a852b84c15aaa98db27133781f9f7dfb6440cc3adb8f5bd8e9b50a1c4e43e65f",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/input_polish_config.py",
+      "destination_path": "src/deerflow/config/input_polish_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "92b81377d8864250df98e1c9feae02e0f5fa417efdd81f58a3df970de596b2f7",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/loop_detection_config.py",
+      "destination_path": "src/deerflow/config/loop_detection_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "a34552c1efcd327ba849cac0caf887405820a2b509df1a20d54324417cc275b6",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/memory_config.py",
+      "destination_path": "src/deerflow/config/memory_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "03355b20b60f66e5f93914c1fcae0748bd0466bdbf44e9915fda4a15d701168f",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/model_config.py",
+      "destination_path": "src/deerflow/config/model_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "09d45dd08b48c82b451078cba5b51b9dcea062fe43f7f747d120a11a4a33e757",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/paths.py",
+      "destination_path": "src/deerflow/config/paths.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "76e244edc45d97613521b23310d725824359511d2e481af7a88e965e5b87afe8",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/read_before_write_config.py",
+      "destination_path": "src/deerflow/config/read_before_write_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "be5fb8ad31cdae5889f06f863410bf6c100943b301e02249a96419e2544f402c",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/reload_boundary.py",
+      "destination_path": "src/deerflow/config/reload_boundary.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "35e493b537babf1ceace0275541ee61d0ace32a27d86b84c070676925597cc25",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/run_events_config.py",
+      "destination_path": "src/deerflow/config/run_events_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "4bbf6f00a2efc68c0c9ada69c2ffb2590cd15883cd97dfcc0434c5727eccf59c",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/run_ownership_config.py",
+      "destination_path": "src/deerflow/config/run_ownership_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "c79a648c1d24ee91153f29b61aadf56d9b5fb56b42ea30e75393cacd7c4fd4c5",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/runtime_paths.py",
+      "destination_path": "src/deerflow/config/runtime_paths.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "0e0b987090a187e8b2c87df01108e9b4bd5d54d7f7191a87acef47094a1c2fb3",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/safety_finish_reason_config.py",
+      "destination_path": "src/deerflow/config/safety_finish_reason_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "fb0f15a075e53db705f430745d0de52ff9119d0121c91f56aa71dbd93fd58cfb",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/sandbox_config.py",
+      "destination_path": "src/deerflow/config/sandbox_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "f53e7c6fbcebee7f2edcd054e3d04861601c1e7aa3e81f119e85406d93601b04",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/scheduler_config.py",
+      "destination_path": "src/deerflow/config/scheduler_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "41edb488b99d3d4a4ea05e29923a6e14e78462d77c0d82a925fe99038c09bccc",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/skill_evolution_config.py",
+      "destination_path": "src/deerflow/config/skill_evolution_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "72ed337ab44a2094af74131d3d8728bd453ef7b1b33af5940083dc3a8c5fc0e4",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/skill_scan_config.py",
+      "destination_path": "src/deerflow/config/skill_scan_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "3f7e7dda4481cdd429b318957b242c8abe8731d32528394415b0afd57f8b5b92",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/skills_config.py",
+      "destination_path": "src/deerflow/config/skills_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "abbdef9a88adba78034f06d9d497fcec10f7397818a3863df4c936ad87ff02cf",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/stream_bridge_config.py",
+      "destination_path": "src/deerflow/config/stream_bridge_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "81a1e7c8972190e95b963771738d23714650036e7049bb65072f6d4b608dd5c7",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/subagents_config.py",
+      "destination_path": "src/deerflow/config/subagents_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "b263e4d78ea1f96f4cccc661546e63850cd56e58fba3f8e9672289bf9a3593c4",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/suggestions_config.py",
+      "destination_path": "src/deerflow/config/suggestions_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "fe72d4a54f94f2c79e368b1f63f4939b6ec4fe41d7283049bb3df9597200803d",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/summarization_config.py",
+      "destination_path": "src/deerflow/config/summarization_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "23a39c2979068191a89fe61afeed251504450840286cf3a2604d0fb675247944",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/title_config.py",
+      "destination_path": "src/deerflow/config/title_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "c5494b27e79065bba6e1fb6441b67200954f7e95ae062d09e77a77ab787511ab",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/token_budget_config.py",
+      "destination_path": "src/deerflow/config/token_budget_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "15b9f139ae3ae615ab69d20af78b2af6baa4f0348b25161d8917571705ccf1bc",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/token_usage_config.py",
+      "destination_path": "src/deerflow/config/token_usage_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "a5fd24b7bdf411870a7e2974c66ab781c0f8214da1f1b9e1f5684000f2a04337",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/tool_config.py",
+      "destination_path": "src/deerflow/config/tool_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "990b85b8ed1f8e2d2c16371f94888759620d7b88baca1f65d63456600352f6fe",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/tool_output_config.py",
+      "destination_path": "src/deerflow/config/tool_output_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "ce3dd001c3e6353a9aab3e70cd71a2ce68d97f1537f682b61cfa9bb185fed59f",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/tool_progress_config.py",
+      "destination_path": "src/deerflow/config/tool_progress_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "61976b67fbbca9017622d053c68f294dfd0caa02b917ed361afed4903cdc5ba8",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/tool_search_config.py",
+      "destination_path": "src/deerflow/config/tool_search_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "ccf7bb7dfd04d095d49012ab042d0298b69a5f5bd8a281a74253175b6e3545c9",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/config/tracing_config.py",
+      "destination_path": "src/deerflow/config/tracing_config.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "b8953bc5b349916438bedfe95d2c57250b8f0b17a1e8c2163319c952ee1868d1",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/models/__init__.py",
+      "destination_path": "src/deerflow/models/__init__.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "751ebf6cb37039345a4595a40021f509c1ffbea324240769bcff338f846ce7fa",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/models/factory.py",
+      "destination_path": "src/deerflow/models/factory.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "cf9b1f590957d5991bbc1452a6b3b3a490ef55913c6539b03261bda5201c749e",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/models/openai_codex_provider.py",
+      "destination_path": "src/deerflow/models/openai_codex_provider.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "763cfa5247e6f5c5a4f34b30866abfd9b0e5acae3002b7593c57e81a341659d8",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/models/credential_loader.py",
+      "destination_path": "src/deerflow/models/credential_loader.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "f421598e62887ccf1b1165386b9fa7da8d4e781a3bdca53ed2280cfd71eb3bd7",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/reflection/__init__.py",
+      "destination_path": "src/deerflow/reflection/__init__.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "d8b3d505d456ff4fd71bb79b12e337a915ef2da719f4bb5df0d177e849bf80ed",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/reflection/resolvers.py",
+      "destination_path": "src/deerflow/reflection/resolvers.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "8f984822fc36937f3164c8340c714026c82a573c1fb444375710b19c4f3e056a",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/tracing/__init__.py",
+      "destination_path": "src/deerflow/tracing/__init__.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "d338abe198de2767b0671bf5b986ebb170d7ce4c765338966e9dec5ddf12ebd6",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/tracing/factory.py",
+      "destination_path": "src/deerflow/tracing/factory.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "1a689c270c876c8f73829413826258859ad9ddb69ade222b3617474af28c8518",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/tracing/metadata.py",
+      "destination_path": "src/deerflow/tracing/metadata.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "387f5bc122085588fe9ebf4837f4bdba4ffc3119b1b58ef73bc0ee1da9812213",
+      "license": "MIT"
+    },
+    {
+      "source_path": "backend/packages/harness/deerflow/tracing/monocle.py",
+      "destination_path": "src/deerflow/tracing/monocle.py",
+      "upstream_commit": "b68e1c686a0cb5a3780089d27354354533451d8e",
+      "sha256": "7dd998320a363c2fc9c6d9eb88d210b8d66ef6b728be3e0fb6481571671e4ad1",
+      "license": "MIT"
+    }
+  ]
+}

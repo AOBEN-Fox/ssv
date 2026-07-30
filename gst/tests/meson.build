@@ -50,6 +50,21 @@ ssv_pub_payload_test = executable('ssv-pub-payload-test',
   link_with : [ssv_pub_lib],
 )
 
+ssv_review_candidate_test = executable('ssv-review-candidate-test',
+  'test_ssv_review_candidate.cpp',
+  '../ssv-pub/ssv_review_candidate.cpp',
+  '../ssv-pub/ssv_frame_evidence.cpp',
+  include_directories : [include_directories('../ssv-pub')],
+  dependencies : [gst_deps, ssv_common_dep, json_dep, jpeg_dep],
+)
+
+ssv_frame_evidence_test = executable('ssv-frame-evidence-test',
+  'test_ssv_frame_evidence.cpp',
+  '../ssv-pub/ssv_frame_evidence.cpp',
+  include_directories : [include_directories('../ssv-pub')],
+  dependencies : [gst_deps, ssv_common_dep, jpeg_dep],
+)
+
 ssv_overlay_motion_predictor_test = executable('ssv-overlay-motion-predictor-test',
   'test_overlay_motion_predictor.cpp',
   '../ssv-overlay/overlay_motion_predictor.cpp',
@@ -85,6 +100,8 @@ test('ssv-meta-types', ssv_meta_types_test)
 test('ssv-inference-timing', ssv_inference_timing_test)
 test('ssv-botsort-processor-contract', ssv_botsort_processor_contract_test)
 test('ssv-pub-payload', ssv_pub_payload_test)
+test('ssv-review-candidate', ssv_review_candidate_test)
+test('ssv-frame-evidence', ssv_frame_evidence_test)
 test('ssv-overlay-motion-predictor', ssv_overlay_motion_predictor_test)
 test('ssv-overlay-runtime', ssv_overlay_runtime_test)
 test('ssv-meta-timeline', ssv_meta_timeline_test)

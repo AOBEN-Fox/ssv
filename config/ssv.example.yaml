@@ -25,6 +25,10 @@ redis:
   db: 0
   # Redis Streams 键名，检测事件写入此流
   stream_key: "ssv:events"
+  # 安全帽单帧复验候选写入此流
+  review_candidate_stream: "ssv:review-candidates"
+  # 安全帽复验结果写入此流
+  review_result_stream: "ssv:review-results"
   # 消费者组名称，agent 服务从此组消费事件
   consumer_group: "ssv-agent"
 
@@ -111,9 +115,22 @@ tracking:
   # 无真实检测时使用 mock track
   mock_track: false
 
+# 事件证据归档配置
+artifacts:
+  events_root: "artifacts/events"
+
+# 单帧安全帽复验配置；默认关闭，不影响 detection 流
+review:
+  enabled: false
+  automatic_decision_min_confidence: 0.80
+
 # Agent 配置（M6 起使用）
 agent:
   # 状态机单次处理超时（秒）
   state_machine_timeout: 300
   # 工具调用最大重试次数
   max_retries: 3
+  # review.enabled=true 时唯一选择的视觉模型名称
+  review_model: ""
+  # 模型 provider 配置；真实 provider 仅可通过环境变量引用凭据
+  models: []

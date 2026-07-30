@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class LoggingConfig(BaseModel):
@@ -17,6 +17,8 @@ class RedisConfig(BaseModel):
     port: int = 6379
     db: int = 0
     stream_key: str = "ssv:events"
+    review_candidate_stream: str = "ssv:review-candidates"
+    review_result_stream: str = "ssv:review-results"
     consumer_group: str = "ssv-agent"
 
 
@@ -59,18 +61,54 @@ class TrackingConfig(BaseModel):
 class AgentConfig(BaseModel):
     state_machine_timeout: int = 300
     max_retries: int = 3
+    review_model: str = ""
+    models: list["ReviewModelConfig"] = Field(default_factory=list)
+
+
+class ReviewModelConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    use: str
+    model: str
+    supports_vision: bool = False
+
+
+class ArtifactsConfig(BaseModel):
+    events_root: Path = Path("artifacts/events")
+
+
+class ReviewConfig(BaseModel):
+    enabled: bool = False
+    automatic_decision_min_confidence: float = Field(default=0.80, ge=0.0, le=1.0)
 
 
 class SsvConfig(BaseModel):
     version: str = "1.0"
-    logging: LoggingConfig = LoggingConfig()
-    redis: RedisConfig = RedisConfig()
-    display: DisplayConfig = DisplayConfig()
-    pipeline: PipelineConfig = PipelineConfig()
-    inference: InferenceConfig = InferenceConfig()
-    tracking: TrackingConfig = TrackingConfig()
-    agent: AgentConfig = AgentConfig()
-    sources: list[dict] = []
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    redis: RedisConfig = Field(default_factory=RedisConfig)
+    display: DisplayConfig = Field(default_factory=DisplayConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+    inference: InferenceConfig = Field(default_factory=InferenceConfig)
+    tracking: TrackingConfig = Field(default_factory=TrackingConfig)
+    artifacts: ArtifactsConfig = Field(default_factory=ArtifactsConfig)
+    review: ReviewConfig = Field(default_factory=ReviewConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
+    sources: list[dict] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_review_model(self) -> "SsvConfig":
+        if not self.review.enabled:
+            return self
+
+        selected = [model for model in self.agent.models if model.name == self.agent.review_model]
+        if len(selected) != 1:
+            raise ValueError(
+                "review.enabled=true 时 agent.review_model 必须唯一匹配 agent.models[].name"
+            )
+        if not selected[0].supports_vision:
+            raise ValueError("agent.review_model 必须配置 supports_vision=true")
+        return self
 
 
 def _apply_env_overrides(cfg: SsvConfig) -> None:

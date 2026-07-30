@@ -1,0 +1,20 @@
+{
+  "type": "review_candidate",
+  "schema_version": 1,
+  "event_id": "4816f729-74d2-5eba-8f2d-3f2ad285f53e",
+  "source": "camera-01",
+  "pipeline_generation": 3,
+  "frame_id": 128,
+  "media_pts_ns": 6200000000,
+  "timestamp_ms": 1785400000000,
+  "track_id": 12,
+  "rule_id": "head_without_helmet_single_frame",
+  "rule_version": 1,
+  "candidate_class": "head",
+  "detection_confidence": 0.91,
+  "bbox": [0.20, 0.10, 0.38, 0.32],
+  "evidence_path": "4816f729-74d2-5eba-8f2d-3f2ad285f53e/evidence.jpg",
+  "evidence_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "evidence_width": 640,
+  "evidence_height": 480
+}

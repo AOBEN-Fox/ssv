@@ -103,6 +103,9 @@ RTSP_LATENCY="$(ssv_yaml_get sources.0.latency_ms 200)"
 REDIS_HOST="${REDIS_HOST:-$(ssv_yaml_get redis.host localhost)}"
 REDIS_PORT="${REDIS_PORT:-$(ssv_yaml_get redis.port 6379)}"
 REDIS_STREAM_KEY="$(ssv_yaml_get redis.stream_key ssv:events)"
+REVIEW_ENABLED="$(ssv_yaml_get review.enabled false)"
+REVIEW_CANDIDATE_STREAM="$(ssv_yaml_get redis.review_candidate_stream ssv:review-candidates)"
+EVENTS_ROOT="$(ssv_yaml_get artifacts.events_root artifacts/events)"
 CHECK_TIMEOUT="$(ssv_yaml_get pipeline.check_timeout 30s)"
 GST_DEBUG_LEVEL="${GST_DEBUG:-$(ssv_yaml_get logging.cpp_debug_level "ssv*:4")}"
 RTSP_URL="${SSV_RTSP_URL:-$(ssv_yaml_get sources.0.uri "")}"
@@ -114,6 +117,7 @@ validate_boolean "display.enabled" "$DISPLAY_ENABLED"
 validate_boolean "display.overlay" "$DISPLAY_OVERLAY_CONFIG"
 validate_boolean "display.latest_frame" "$DISPLAY_LATEST_FRAME"
 validate_boolean "display.motion_prediction.enabled" "$MOTION_PREDICTION_ENABLED"
+validate_boolean "review.enabled" "$REVIEW_ENABLED"
 
 if [[ ! "$DISPLAY_FPS" =~ ^[1-9][0-9]*$ ]]; then
     ssv_error "display.fps 必须是正整数: $DISPLAY_FPS"
@@ -324,6 +328,9 @@ pub_props=(
     "redis-host=$REDIS_HOST"
     "redis-port=$REDIS_PORT"
     "stream-key=$REDIS_STREAM_KEY"
+    "review-enabled=$REVIEW_ENABLED"
+    "review-stream-key=$REVIEW_CANDIDATE_STREAM"
+    "events-root=$EVENTS_ROOT"
 )
 
 overlay_props=(
@@ -393,6 +400,7 @@ ssv_info "模型家族: $MODEL_FAMILY, 输出格式: $OUTPUT_FORMAT"
 ssv_info "目标类别: ${TARGET_CLASS:-全部类别}"
 ssv_info "类别表: ${LABEL_MAP:-内置 COCO}"
 ssv_info "Redis Stream: $REDIS_STREAM_KEY"
+ssv_info "安全帽复验: enabled=$REVIEW_ENABLED, stream=$REVIEW_CANDIDATE_STREAM, events_root=$EVENTS_ROOT"
 
 if [ "$SHOW_DISPLAY" = true ]; then
     ssv_info "模式: 实时链路 + 视频观察窗口 (sink: $DISPLAY_SINK)"

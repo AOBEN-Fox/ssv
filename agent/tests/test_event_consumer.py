@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
 from typing import Any
+
+from pathlib import Path
 
 from ssv_agent.config import SsvConfig
 from ssv_agent.event_consumer import EventConsumer
@@ -19,38 +20,44 @@ class FakeRedis:
         self.acked.append((stream, group, msg_id))
 
 
-def make_consumer(monkeypatch: Any) -> tuple[EventConsumer, FakeRedis]:
+class FakeProcessor:
+    def __init__(self, result: bool = True) -> None:
+        self.result = result
+        self.calls: list[Any] = []
+
+    def process(self, candidate: Any) -> bool:
+        self.calls.append(candidate)
+        return self.result
+
+
+def make_consumer(monkeypatch: Any) -> tuple[EventConsumer, FakeRedis, FakeProcessor]:
     fake = FakeRedis()
     monkeypatch.setattr("ssv_agent.event_consumer.Redis", lambda **_kwargs: fake)
-    consumer = EventConsumer(SsvConfig())
-    return consumer, fake
+    processor = FakeProcessor()
+    consumer = EventConsumer(SsvConfig(), processor)
+    return consumer, fake, processor
 
 
 def test_ensure_group_creates_stream_group(monkeypatch: Any) -> None:
-    consumer, fake = make_consumer(monkeypatch)
+    consumer, fake, _ = make_consumer(monkeypatch)
 
     consumer._ensure_group()
 
-    assert fake.created == [("ssv:events", "ssv-agent", "0", True)]
+    assert fake.created == [("ssv:review-candidates", "ssv-agent", "0", True)]
 
 
 def test_handle_event_parses_detection_and_acks(monkeypatch: Any) -> None:
-    consumer, fake = make_consumer(monkeypatch)
-    payload = {
-        "source": "camera-1",
-        "frame_id": 42,
-        "detections": [
-            {"class": "person", "confidence": 0.91, "track_id": 5},
-        ],
-    }
+    consumer, fake, processor = make_consumer(monkeypatch)
+    payload = (Path(__file__).parent / "review/fixtures/review-candidate-v1.json").read_text()
 
-    consumer._handle_event("123-0", {"event": json.dumps(payload)})
+    consumer._handle_event("123-0", {"event": payload})
 
-    assert fake.acked == [("ssv:events", "ssv-agent", "123-0")]
+    assert len(processor.calls) == 1
+    assert fake.acked == [("ssv:review-candidates", "ssv-agent", "123-0")]
 
 
 def test_handle_event_rejects_malformed_json_without_ack(monkeypatch: Any) -> None:
-    consumer, fake = make_consumer(monkeypatch)
+    consumer, fake, _ = make_consumer(monkeypatch)
 
     consumer._handle_event("123-0", {"event": "{"})
 

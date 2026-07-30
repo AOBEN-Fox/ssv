@@ -21,5 +21,4 @@ fi
 ssv_info "按 Ctrl+C 停止"
 echo ""
 
-cd agent
-exec uv run python -m ssv_agent "${config_args[@]}"
+exec uv --project agent run python -m ssv_agent "${config_args[@]}"

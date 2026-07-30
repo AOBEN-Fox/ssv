@@ -63,6 +63,26 @@ GST_START_TEST(test_ssv_plugin_factories_are_registered) {
 }
 GST_END_TEST
 
+GST_START_TEST(test_ssvpub_review_properties_default_to_disabled) {
+    GstElement *pub = gst_element_factory_make("ssvpub", nullptr);
+    fail_unless(pub != nullptr);
+    gboolean review_enabled = TRUE;
+    gchar *review_stream_key = nullptr;
+    gchar *events_root = nullptr;
+    g_object_get(pub,
+        "review-enabled", &review_enabled,
+        "review-stream-key", &review_stream_key,
+        "events-root", &events_root,
+        nullptr);
+    fail_unless(!review_enabled);
+    fail_unless(std::string(review_stream_key) == "ssv:review-candidates");
+    fail_unless(std::string(events_root) == "artifacts/events");
+    g_free(review_stream_key);
+    g_free(events_root);
+    gst_object_unref(pub);
+}
+GST_END_TEST
+
 GST_START_TEST(test_infer_track_preserve_controlled_buffer_timing) {
     const char *source_id = "plugin-timing-test";
     GstElement *pipeline = gst_parse_launch(
@@ -702,6 +722,7 @@ static Suite *ssv_gst_suite() {
     Suite *suite = suite_create("ssv-gst");
     TCase *tc = tcase_create("plugins");
     tcase_add_test(tc, test_ssv_plugin_factories_are_registered);
+    tcase_add_test(tc, test_ssvpub_review_properties_default_to_disabled);
     tcase_add_test(tc, test_infer_track_preserve_controlled_buffer_timing);
     tcase_add_test(tc, test_ssvtrack_rejects_wrong_source_observation);
     tcase_add_test(tc, test_ssvtrack_resets_mock_state_for_consumed_generation);

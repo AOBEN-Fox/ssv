@@ -14,6 +14,10 @@ std::string ssv_pub_build_event_payload(
 bool ssv_pub_snapshot_is_current(
     std::string_view source_id,
     const SsvTrackedFrame &frame);
+bool ssv_pub_review_snapshot_matches_buffer(
+    std::string_view source_id,
+    const SsvTrackedFrame &frame,
+    GstClockTime buffer_pts);
 
 G_BEGIN_DECLS
 

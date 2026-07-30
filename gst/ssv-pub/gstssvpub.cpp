@@ -1,12 +1,14 @@
 #include "gstssvpub.hpp"
 #include "ssv_logging.hpp"
 #include "ssv_meta.hpp"
+#include "ssv_review_candidate.hpp"
 
 #include <gst/video/video.h>
 #include <hiredis/hiredis.h>
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <chrono>
 #include <cstring>
 #include <ctime>
 #include <utility>
@@ -20,6 +22,12 @@ struct _SsvPub {
     gchar *redis_host;
     gint redis_port;
     gchar *stream_key;
+    gboolean review_enabled;
+    gchar *review_stream_key;
+    gchar *events_root;
+    GstVideoInfo video_info;
+    gboolean have_video_info;
+    SsvReviewDeduplicator *review_deduplicator;
 
     redisContext *redis_ctx;
     SsvSourceMeta *meta;
@@ -31,6 +39,9 @@ enum {
     PROP_REDIS_HOST,
     PROP_REDIS_PORT,
     PROP_STREAM_KEY,
+    PROP_REVIEW_ENABLED,
+    PROP_REVIEW_STREAM_KEY,
+    PROP_EVENTS_ROOT,
 };
 
 G_DEFINE_TYPE(SsvPub, ssv_pub, GST_TYPE_BASE_TRANSFORM)
@@ -90,6 +101,16 @@ ssv_pub_snapshot_is_current(
         ssv_meta(source_id)->generation() == frame.timing.generation;
 }
 
+bool
+ssv_pub_review_snapshot_matches_buffer(
+    std::string_view source_id,
+    const SsvTrackedFrame &frame,
+    GstClockTime buffer_pts)
+{
+    return ssv_pub_snapshot_is_current(source_id, frame) &&
+        buffer_pts != GST_CLOCK_TIME_NONE && frame.timing.pts == buffer_pts;
+}
+
 static gboolean
 ssv_pub_redis_connect(SsvPub *self) {
     if (self->redis_ctx) {
@@ -115,29 +136,90 @@ ssv_pub_redis_connect(SsvPub *self) {
     return TRUE;
 }
 
-static void
-ssv_pub_redis_publish(SsvPub *self, const SsvTrackedFrame &frame) {
-    if (!self->redis_ctx)
-        return;
-
-    std::string payload = ssv_pub_build_event_payload(frame, std::time(nullptr) * 1000LL);
-
-    auto *reply = (redisReply *)redisCommand(self->redis_ctx,
+static bool
+ssv_pub_redis_publish_json(
+    redisContext *context, std::string_view stream, std::string_view payload,
+    SsvPub *self, bool reconnect_on_failure) {
+    if (!context)
+        return false;
+    auto *reply = (redisReply *)redisCommand(context,
         "XADD %s * event %s",
-        self->stream_key, payload.c_str());
+        std::string(stream).c_str(), std::string(payload).c_str());
 
     if (!reply) {
         GST_WARNING_OBJECT(self, "Redis XADD failed, reconnecting...");
-        ssv_pub_redis_connect(self);
-        return;
+        if (reconnect_on_failure)
+            ssv_pub_redis_connect(self);
+        return false;
     }
     if (reply->type == REDIS_REPLY_ERROR) {
         GST_WARNING_OBJECT(self, "Redis error: %s", reply->str);
+        freeReplyObject(reply);
+        return false;
     }
     freeReplyObject(reply);
+    return true;
+}
+
+static void
+ssv_pub_redis_publish(SsvPub *self, const SsvTrackedFrame &frame) {
+    const auto payload = ssv_pub_build_event_payload(frame, std::time(nullptr) * 1000LL);
+    if (!ssv_pub_redis_publish_json(self->redis_ctx, self->stream_key, payload, self, true))
+        return;
 
     GST_DEBUG_OBJECT(self, "published frame %" G_GUINT64_FORMAT " with %zu detections",
         frame.frame_id, frame.objects.size());
+}
+
+static void
+ssv_pub_publish_review_candidates(SsvPub *self, const SsvTrackedFrame &snapshot, GstBuffer *buffer)
+{
+    if (!self->have_video_info || !self->review_deduplicator ||
+        !ssv_pub_review_snapshot_matches_buffer(self->source_id, snapshot, GST_BUFFER_PTS(buffer)))
+        return;
+    self->review_deduplicator->reset_for_generation(snapshot.timing.generation);
+    bool has_candidate = false;
+    for (const auto &object : snapshot.objects) {
+        if (ssv_review_object_is_eligible(object) && !self->review_deduplicator->already_published(
+                ssv_review_dedup_key(snapshot.source_id, snapshot.timing.generation, object.track_id))) {
+            has_candidate = true;
+            break;
+        }
+    }
+    if (!has_candidate)
+        return;
+    GstVideoFrame frame;
+    if (!gst_video_frame_map(&frame, &self->video_info, buffer, GST_MAP_READ)) {
+        GST_WARNING_OBJECT(self, "无法映射 BGR 复验证据帧");
+        return;
+    }
+    std::string error;
+    const auto evidence = ssv_encode_bgr_jpeg(
+        static_cast<const std::uint8_t *>(GST_VIDEO_FRAME_PLANE_DATA(&frame, 0)),
+        GST_VIDEO_INFO_WIDTH(&self->video_info),
+        GST_VIDEO_INFO_HEIGHT(&self->video_info), GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0), 90, &error);
+    gst_video_frame_unmap(&frame);
+    if (!evidence) {
+        GST_WARNING_OBJECT(self, "复验证据编码失败: %s", error.c_str());
+        return;
+    }
+    const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    for (const auto &object : snapshot.objects) {
+        const auto candidate = ssv_review_make_candidate(
+            snapshot, object, timestamp_ms, evidence->sha256, evidence->width, evidence->height);
+        if (!candidate || self->review_deduplicator->already_published(
+                ssv_review_dedup_key(snapshot.source_id, snapshot.timing.generation, object.track_id)))
+            continue;
+        const auto result = ssv_review_try_publish(
+            self->events_root, self->review_stream_key, *candidate, *evidence,
+            *self->review_deduplicator,
+            [self](std::string_view stream, std::string_view payload) {
+                return ssv_pub_redis_publish_json(self->redis_ctx, stream, payload, self, true);
+            }, &error);
+        if (result == SsvReviewPublishResult::Failed)
+            GST_WARNING_OBJECT(self, "复验候选发布失败: %s", error.c_str());
+    }
 }
 
 // ── GstBaseTransform callbacks ────────────────────────────────────────
@@ -167,7 +249,6 @@ ssv_pub_stop(GstBaseTransform *trans) {
 
 static GstFlowReturn
 ssv_pub_transform_ip(GstBaseTransform *trans, GstBuffer *buf) {
-    (void)buf;
     auto *self = SSV_PUB(trans);
 
     if (!self->meta)
@@ -183,8 +264,22 @@ ssv_pub_transform_ip(GstBaseTransform *trans, GstBuffer *buf) {
         return GST_FLOW_OK;
     }
     ssv_pub_redis_publish(self, *snapshot);
+    if (self->review_enabled)
+        ssv_pub_publish_review_candidates(self, *snapshot, buf);
 
     return GST_FLOW_OK;
+}
+
+static gboolean
+ssv_pub_set_caps(GstBaseTransform *trans, GstCaps *in_caps, GstCaps *) {
+    auto *self = SSV_PUB(trans);
+    GstVideoInfo info;
+    gst_video_info_init(&info);
+    if (!gst_video_info_from_caps(&info, in_caps) || GST_VIDEO_INFO_FORMAT(&info) != GST_VIDEO_FORMAT_BGR)
+        return FALSE;
+    self->video_info = info;
+    self->have_video_info = TRUE;
+    return TRUE;
 }
 
 // ── Properties ─────────────────────────────────────────────────────────
@@ -209,6 +304,17 @@ ssv_pub_set_property(GObject *object, guint prop_id,
         g_free(self->stream_key);
         self->stream_key = g_value_dup_string(value);
         break;
+    case PROP_REVIEW_ENABLED:
+        self->review_enabled = g_value_get_boolean(value);
+        break;
+    case PROP_REVIEW_STREAM_KEY:
+        g_free(self->review_stream_key);
+        self->review_stream_key = g_value_dup_string(value);
+        break;
+    case PROP_EVENTS_ROOT:
+        g_free(self->events_root);
+        self->events_root = g_value_dup_string(value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
     }
@@ -231,6 +337,15 @@ ssv_pub_get_property(GObject *object, guint prop_id,
     case PROP_STREAM_KEY:
         g_value_set_string(value, self->stream_key);
         break;
+    case PROP_REVIEW_ENABLED:
+        g_value_set_boolean(value, self->review_enabled);
+        break;
+    case PROP_REVIEW_STREAM_KEY:
+        g_value_set_string(value, self->review_stream_key);
+        break;
+    case PROP_EVENTS_ROOT:
+        g_value_set_string(value, self->events_root);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
     }
@@ -244,6 +359,9 @@ ssv_pub_finalize(GObject *object) {
     g_free(self->source_id);
     g_free(self->redis_host);
     g_free(self->stream_key);
+    g_free(self->review_stream_key);
+    g_free(self->events_root);
+    delete self->review_deduplicator;
     if (self->redis_ctx)
         redisFree(self->redis_ctx);
     G_OBJECT_CLASS(ssv_pub_parent_class)->finalize(object);
@@ -281,6 +399,18 @@ ssv_pub_class_init(SsvPubClass *klass) {
         g_param_spec_string("stream-key", "Stream Key",
             "Redis Stream key for detection events",
             "ssv:events", (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(gobject_class, PROP_REVIEW_ENABLED,
+        g_param_spec_boolean("review-enabled", "Review Enabled",
+            "Archive and publish first head frame per track", FALSE,
+            (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(gobject_class, PROP_REVIEW_STREAM_KEY,
+        g_param_spec_string("review-stream-key", "Review Stream Key",
+            "Redis Stream key for review candidates", "ssv:review-candidates",
+            (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(gobject_class, PROP_EVENTS_ROOT,
+        g_param_spec_string("events-root", "Events Root",
+            "Root directory for review event artifacts", "artifacts/events",
+            (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
     gst_element_class_set_static_metadata(element_class,
         "SSV Redis Publisher",
@@ -294,6 +424,7 @@ ssv_pub_class_init(SsvPubClass *klass) {
     base_class->start = ssv_pub_start;
     base_class->stop = ssv_pub_stop;
     base_class->transform_ip = ssv_pub_transform_ip;
+    base_class->set_caps = ssv_pub_set_caps;
     base_class->passthrough_on_same_caps = TRUE;
 }
 
@@ -303,6 +434,12 @@ ssv_pub_init(SsvPub *self) {
     self->redis_host = g_strdup("localhost");
     self->redis_port = 6379;
     self->stream_key = g_strdup("ssv:events");
+    self->review_enabled = FALSE;
+    self->review_stream_key = g_strdup("ssv:review-candidates");
+    self->events_root = g_strdup("artifacts/events");
+    gst_video_info_init(&self->video_info);
+    self->have_video_info = FALSE;
+    self->review_deduplicator = new SsvReviewDeduplicator();
     self->redis_ctx = nullptr;
     self->meta = nullptr;
 }

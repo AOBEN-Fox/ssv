@@ -12,6 +12,7 @@ gst_check_dep = dependency('gstreamer-check-1.0')
 yaml_dep = dependency('yaml-cpp')
 hiredis_dep = dependency('hiredis', required : false)
 json_dep = dependency('nlohmann_json', required : false)
+jpeg_dep = dependency('libjpeg', required : true)
 
 tensorrt_mode = get_option('tensorrt_mode')
 tensorrt_dep = declare_dependency()

@@ -4,8 +4,12 @@ version = "0.1.0"
 description = "Site Safety Vision agent orchestration service"
 requires-python = ">=3.12"
 dependencies = [
-    "pydantic>=2.0",
-    "pyyaml>=6.0",
+    "httpx>=0.28.0",
+    "langchain>=1.2.15",
+    "langchain-openai>=1.2.1",
+    "pillow>=11.0",
+    "pydantic>=2.12.5",
+    "pyyaml>=6.0.3",
     "structlog>=24.0",
     "redis>=5.0",
     "python-dotenv>=1.0",
@@ -26,7 +30,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ssv_agent"]
+packages = ["src/ssv_agent", "src/deerflow"]
 
 [tool.ruff]
 line-length = 100

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import os
 import signal
 import time
 
@@ -8,21 +8,21 @@ import structlog
 from redis import Redis
 
 from ssv_agent.config import SsvConfig
+from ssv_agent.review.contracts import ReviewCandidate
+from ssv_agent.review.processor import ReviewProcessor
 
 logger = structlog.get_logger()
 
 
 class EventConsumer:
-    """Minimal Redis Streams consumer that reads detection events and logs them.
+    """串行消费已归档的复验候选。"""
 
-    M2 scope: consume and print.  Full state-machine orchestration arrives in M6.
-    """
-
-    def __init__(self, config: SsvConfig) -> None:
-        self._stream = config.redis.stream_key
+    def __init__(self, config: SsvConfig, processor: ReviewProcessor, redis_client: Redis | None = None) -> None:
+        self._stream = config.redis.review_candidate_stream
         self._group = config.redis.consumer_group
+        self._processor = processor
         self._running = False
-        self._redis = Redis(
+        self._redis = redis_client or Redis(
             host=config.redis.host,
             port=config.redis.port,
             db=config.redis.db,
@@ -42,7 +42,7 @@ class EventConsumer:
         """Blocking consumer loop.  Returns on SIGINT/SIGTERM."""
         self._running = True
         self._ensure_group()
-        consumer_name = "ssv-agent-0"
+        consumer_name = f"{os.uname().nodename}-{os.getpid()}"
 
         logger.info(
             "event consumer started",
@@ -57,7 +57,7 @@ class EventConsumer:
                     self._group,
                     consumer_name,
                     {self._stream: ">"},
-                    count=10,
+                    count=1,
                     block=1000,  # 1 s
                 )
             except Exception as exc:
@@ -75,35 +75,17 @@ class EventConsumer:
     def _handle_event(self, msg_id: str, fields: dict[str, str]) -> None:
         raw = fields.get("event", "{}")
         try:
-            event = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("malformed event", msg_id=msg_id, raw=raw)
+            candidate = ReviewCandidate.model_validate_json(raw)
+        except Exception:
+            logger.warning("复验候选无效", msg_id=msg_id)
             return
-
-        detections = event.get("detections", [])
-        det_summary = ", ".join(
-            f"{d['class']}({d['confidence']:.2f}"
-            + (f", track={d['track_id']}" if d.get("track_id", -1) >= 0 else "")
-            + ")"
-            for d in detections
-        )
-
-        logger.info(
-            "detection event",
-            msg_id=msg_id,
-            source=event.get("source", "?"),
-            frame_id=event.get("frame_id"),
-            detections=det_summary,
-            count=len(detections),
-        )
-
-        # ACK after processing
-        self._redis.xack(self._stream, self._group, msg_id)
+        if self._processor.process(candidate) is True:
+            self._redis.xack(self._stream, self._group, msg_id)
 
 
-def run_consumer(config: SsvConfig) -> None:
+def run_consumer(config: SsvConfig, processor: ReviewProcessor, redis_client: Redis | None = None) -> None:
     """Run the event consumer with graceful shutdown."""
-    consumer = EventConsumer(config)
+    consumer = EventConsumer(config, processor, redis_client)
 
     def _shutdown(sig: int, _frame: object) -> None:
         logger.info("received signal, stopping consumer", signal=sig)
